@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>J.A.R.V.I.S.</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#02060c">
+<link rel="manifest" href="manifest.json">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root { --cy:#43e4ff; --cy2:#16566a; --gold:#ffb84d; --red:#ff5c5c; --panel:rgba(4,18,28,.72); }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; color:var(--cy);
+    background:radial-gradient(ellipse at center, #071f38 0%, #02060c 70%);
+    font-family:Consolas, Menlo, "Courier New", monospace; overflow:hidden;
+    -webkit-user-select:none; user-select:none; }
+  #scene { position:fixed; inset:0; }
+  #scene canvas { display:block; width:100%; height:100%; touch-action:none; }
+  .hud { position:fixed; inset:0; pointer-events:none; }
+  .panel { position:absolute; background:var(--panel); border:1px solid var(--cy2); border-radius:4px;
+    padding:10px 12px; pointer-events:auto; box-shadow:0 0 22px rgba(67,228,255,.12);
+    backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); }
+  #top { position:absolute; top:12px; left:14px; right:14px; display:flex; justify-content:space-between;
+    font-size:11px; letter-spacing:.2em; opacity:.9; }
+  #clock { position:absolute; top:10px; left:50%; transform:translateX(-50%); font-size:clamp(18px,3vw,30px);
+    letter-spacing:.18em; text-shadow:0 0 12px var(--cy); }
+  #left { left:12px; top:56px; width:210px; }
+  #right { right:12px; top:56px; width:300px; max-height:calc(100% - 180px); display:flex; flex-direction:column; }
+  #log { overflow:auto; font-size:12px; line-height:1.5; min-height:90px; max-height:45vh; }
+  #log .me { color:#9fc3cf; } #log .ai { color:var(--gold); } #log .err { color:var(--red); }
+  h3 { margin:0 0 8px; font-size:10px; letter-spacing:.22em; color:var(--gold); font-weight:normal; }
+  button { background:transparent; color:var(--cy); border:1px solid var(--cy2); padding:8px;
+    margin:3px 0; width:100%; text-align:left; font:inherit; font-size:12px; cursor:pointer; border-radius:3px; }
+  button:hover, button.on { border-color:var(--cy); background:rgba(67,228,255,.14); }
+  .row { display:flex; gap:6px; } .row button { text-align:center; }
+  #jarvis { position:absolute; left:18px; bottom:96px; width:130px; height:130px; border-radius:50%;
+    border:2px solid var(--cy2); display:flex; align-items:center; justify-content:center;
+    box-shadow:0 0 26px rgba(67,228,255,.2), inset 0 0 22px rgba(67,228,255,.12); }
+  #jarvis span { font-size:14px; letter-spacing:.3em; text-shadow:0 0 8px var(--cy); }
+  #jarvis::before { content:""; position:absolute; inset:-8px; border-radius:50%;
+    border:2px solid transparent; border-top-color:var(--cy); animation:spin 4s linear infinite; }
+  #jarvis.active::before { border-top-color:var(--gold); animation-duration:1.2s; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #bar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); display:flex; gap:8px;
+    width:min(640px,94vw); pointer-events:auto; }
+  #cmd { flex:1; min-width:0; background:rgba(4,18,28,.9); border:1px solid var(--cy2); color:var(--cy);
+    padding:12px; font:inherit; font-size:16px; border-radius:4px; }
+  #cmd:focus { outline:none; border-color:var(--cy); }
+  .round { width:52px; height:52px; border-radius:50%; padding:0; margin:0; text-align:center; font-size:20px;
+    flex:0 0 52px; display:flex; align-items:center; justify-content:center; }
+  #mic.rec { border-color:var(--gold); color:var(--gold); box-shadow:0 0 16px rgba(255,184,77,.4); }
+  #menuBtn { display:none; position:absolute; left:12px; top:44px; width:auto; padding:6px 10px; pointer-events:auto; }
+  @media (max-width:760px) {
+    #right { display:none; }
+    #jarvis { display:none; }
+    #left { display:none; top:90px; left:8px; width:190px; max-height:calc(100% - 180px); overflow:auto; }
+    #left.open { display:block; }
+    #menuBtn { display:block; }
+  }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+
+<div class="hud">
+  <div id="top"><span>STARK INDUSTRIES</span><span id="status">ONLINE</span></div>
+  <div id="clock">--:--:--</div>
+  <button id="menuBtn">☰ MENÜ</button>
+
+  <div class="panel" id="left">
+    <h3>ANZUG-AUSWAHL</h3>
+    <div id="marks"></div>
+    <h3 style="margin-top:12px">STEUERUNG</h3>
+    <button id="bSuit">Anzug an / aus</button>
+    <button id="bMode">Farbe / Draht</button>
+    <button id="bGlow">Beleuchten</button>
+    <button id="bRot">Auto-Rotation</button>
+    <button id="bReset">Ansicht zurücksetzen</button>
+    <h3 style="margin-top:12px">FOKUS</h3>
+    <div class="row"><button data-focus="helm">Helm</button><button data-focus="reaktor">Reaktor</button></div>
+    <div class="row"><button data-focus="beine">Beine</button><button data-focus="all">Gesamt</button></div>
+  </div>
+
+  <div class="panel" id="right">
+    <h3>J.A.R.V.I.S. PROTOKOLL</h3>
+    <div id="log"></div>
+    <h3 style="margin-top:12px">BEISPIELE</h3>
+    <div style="font-size:11px;opacity:.65;line-height:1.5">
+      „zeig mir Mark 45 in Farbe“ · „mach ihn größer und zeig mir die Rückseite“ ·
+      „zeig mir den Draht“ · „beleuchte das“ · „schalte den Anzug aus“ · „reset“
+    </div>
+  </div>
+
+  <div id="jarvis"><span>JARVIS</span></div>
+
+  <div id="bar">
+    <input id="cmd" placeholder="Befehl eingeben…" autocomplete="off">
+    <button id="mic" class="round" title="Sprechen">🎙</button>
+    <button id="stop" class="round" title="Stopp">■</button>
+  </div>
+</div>
+
+<script>
+// ============ Server (nur öffentliche Funktions-URL, keine Schlüssel) ============
+const API = 'https://vnrssfuohdgqfzfmvnih.supabase.co/functions/v1/index';
+
+// ============ Daten ============
+const MARKS = {
+  '1':  { name:'Mark 1',  primary:0x8a8f99, accent:0xc2402e, reactor:0x43e4ff },
+  '5':  { name:'Mark 5',  primary:0xb3262b, accent:0xd9a441, reactor:0x43e4ff },
+  '42': { name:'Mark 42', primary:0xc62d2d, accent:0xf0c05a, reactor:0x7af0ff },
+  '45': { name:'Mark 45', primary:0xa81e25, accent:0xe8b04b, reactor:0x8ff3ff },
+  '50': { name:'Mark 50', primary:0xd9dde3, accent:0xf3c64f, reactor:0x43e4ff },
+};
+const FOCUS = {
+  helm:    { y: 2.0,  d: 4.2, label: 'Helm' },
+  reaktor: { y: 1.2,  d: 3.6, label: 'Reaktor' },
+  beine:   { y: -1.2, d: 5.5, label: 'Beine' },
+  all:     { y: 0.2,  d: 9,   label: 'Gesamtansicht' },
+};
+
+// ============ Zustand ============
+const state = { mark:'5', mode:'wire', glow:false, suitOn:true, autoRot:true, focus:'all' };
+const view  = { dist:9, distT:9, rotY:0, rotYT:0, rotX:0, rotXT:0, focusY:0.2, focusYT:0.2, drag:false };
+let recording = false;
+const $ = id => document.getElementById(id);
+
+// ============ Three.js Grundaufbau ============
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+$('scene').appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+scene.add(new THREE.AmbientLight(0x4a7090, 0.7));
+const key = new THREE.DirectionalLight(0xffffff, 1.0); key.position.set(3, 5, 4); scene.add(key);
+const rim = new THREE.DirectionalLight(0x43e4ff, 0.9); rim.position.set(-4, 2, -3); scene.add(rim);
+
+// ============ Punktnetz als Kugel (wie Bild 1) ============
+const network = new THREE.Group();
+scene.add(network);
+const netLineMat = new THREE.LineBasicMaterial({ color:0x43e4ff, transparent:true, opacity:0.18 });
+const netDotMat  = new THREE.PointsMaterial({ color:0xb8f3ff, size:0.075, transparent:true, opacity:0.9 });
+{
+  const NET_R = 3.6, N = 170, golden = Math.PI * (3 - Math.sqrt(5));
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    const y = 1 - 2 * (i + 0.5) / N, r = Math.sqrt(1 - y * y), th = golden * i;
+    pts.push(new THREE.Vector3(Math.cos(th) * r * NET_R, y * NET_R, Math.sin(th) * r * NET_R));
+  }
+  const dotPos = new Float32Array(N * 3);
+  pts.forEach((p, i) => { dotPos[i*3] = p.x; dotPos[i*3+1] = p.y; dotPos[i*3+2] = p.z; });
+  const dotGeo = new THREE.BufferGeometry();
+  dotGeo.setAttribute('position', new THREE.BufferAttribute(dotPos, 3));
+  network.add(new THREE.Points(dotGeo, netDotMat));
+
+  const linePos = [];
+  for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
+    if (pts[i].distanceTo(pts[j]) < 1.25) {
+      linePos.push(pts[i].x, pts[i].y, pts[i].z, pts[j].x, pts[j].y, pts[j].z);
+    }
+  }
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
+  network.add(new THREE.LineSegments(lineGeo, netLineMat));
+}
+
+// ============ Glühtextur für den Reaktor ============
+function glowTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.25, 'rgba(255,255,255,0.5)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+}
+
+// ============ Anzug (eigene, vereinfachte Formen) ============
+const mainMat   = new THREE.MeshStandardMaterial({ color:0xb3262b, metalness:0.7, roughness:0.3, emissive:0xd9a441, emissiveIntensity:0 });
+const accentMat = new THREE.MeshStandardMaterial({ color:0xd9a441, metalness:0.9, roughness:0.25 });
+const glowMat   = new THREE.MeshBasicMaterial({ color:0x43e4ff });
+const wireMat   = new THREE.MeshBasicMaterial({ color:0x43e4ff, wireframe:true, transparent:true, opacity:0.55 });
+const KINDS = { main:mainMat, accent:accentMat, glow:glowMat };
+
+const P = (g, x, y, z, k, s=[1,1,1], r=[0,0,0]) => ({ g, x, y, z, k, s, r });
+const SPEC = [
+  P(() => new THREE.SphereGeometry(0.44, 32, 24), 0, 2.2, 0, 'main', [0.92,1.08,1]),
+  P(() => new THREE.BoxGeometry(0.6, 0.2, 0.1), 0, 2.12, 0.38, 'glow'),
+  P(() => new THREE.CylinderGeometry(0.18, 0.22, 0.24, 20), 0, 1.66, 0, 'accent'),
+  P(() => new THREE.BoxGeometry(1.25, 1.0, 0.66), 0, 1.15, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.9, 0.6, 0.52), 0, 0.27, 0, 'accent'),
+  P(() => new THREE.CylinderGeometry(0.2, 0.2, 0.08, 32), 0, 1.2, 0.36, 'glow', [1,1,1], [Math.PI/2,0,0]),
+  P(() => new THREE.TorusGeometry(0.28, 0.035, 12, 48), 0, 1.2, 0.38, 'accent'),
+  P(() => new THREE.SphereGeometry(0.3, 20, 16), -0.82, 1.6, 0, 'main'),
+  P(() => new THREE.SphereGeometry(0.3, 20, 16),  0.82, 1.6, 0, 'main'),
+  P(() => new THREE.CylinderGeometry(0.16, 0.14, 0.75, 16), -0.95, 1.12, 0, 'main'),
+  P(() => new THREE.CylinderGeometry(0.16, 0.14, 0.75, 16),  0.95, 1.12, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.3, 0.75, 0.3), -1.0, 0.3, 0, 'accent'),
+  P(() => new THREE.BoxGeometry(0.3, 0.75, 0.3),  1.0, 0.3, 0, 'accent'),
+  P(() => new THREE.SphereGeometry(0.2, 16, 12), -1.0, -0.13, 0, 'main'),
+  P(() => new THREE.SphereGeometry(0.2, 16, 12),  1.0, -0.13, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.36, 0.9, 0.36), -0.3, -0.6, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.36, 0.9, 0.36),  0.3, -0.6, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.34, 0.85, 0.34), -0.3, -1.55, 0, 'accent'),
+  P(() => new THREE.BoxGeometry(0.34, 0.85, 0.34),  0.3, -1.55, 0, 'accent'),
+  P(() => new THREE.BoxGeometry(0.4, 0.2, 0.6), -0.3, -2.05, 0.1, 'main'),
+  P(() => new THREE.BoxGeometry(0.4, 0.2, 0.6),  0.3, -2.05, 0.1, 'main'),
+];
+
+const suit = new THREE.Group();
+scene.add(suit);
+const parts = [];
+for (const sp of SPEC) {
+  const mesh = new THREE.Mesh(sp.g(), KINDS[sp.k]);
+  mesh.scale.set(...sp.s);
+  mesh.rotation.set(...sp.r);
+  const home = new THREE.Vector3(sp.x, sp.y, sp.z);
+  mesh.position.copy(home);
+  const dir = home.clone().normalize();
+  if (!isFinite(dir.x)) dir.set(0, 1, 0);
+  const scatter = dir.multiplyScalar(2.6).add(new THREE.Vector3(
+    (Math.random()-0.5)*1.2, (Math.random()-0.5)*1.2, (Math.random()-0.5)*1.2));
+  mesh.userData = { home, scatter, base: sp.r, kind: sp.k,
+    spin: [(Math.random()-0.5)*3, (Math.random()-0.5)*3, (Math.random()-0.5)*3] };
+  suit.add(mesh);
+  parts.push(mesh);
+}
+
+const reactorLight = new THREE.PointLight(0x43e4ff, 0.6, 6);
+reactorLight.position.set(0, 1.2, 0.9);
+suit.add(reactorLight);
+
+const reactorSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: glowTexture(), color: 0x43e4ff, transparent: true, opacity: 0.5,
+  blending: THREE.AdditiveBlending, depthWrite: false }));
+reactorSprite.position.set(0, 1.2, 0.5);
+reactorSprite.scale.set(1.2, 1.2, 1);
+suit.add(reactorSprite);
+
+// ============ Anwendung ============
+function applyMark() {
+  const m = MARKS[state.mark];
+  mainMat.color.setHex(m.primary);
+  mainMat.emissive.setHex(m.accent);
+  accentMat.color.setHex(m.accent);
+  glowMat.color.setHex(m.reactor);
+  wireMat.color.setHex(m.reactor);
+  reactorLight.color.setHex(m.reactor);
+  if (!recording) reactorSprite.material.color.setHex(m.reactor);
+  document.querySelectorAll('[data-mark]').forEach(b => b.classList.toggle('on', b.dataset.mark === state.mark));
+}
+function applyMode() {
+  for (const p of parts) {
+    const k = p.userData.kind;
+    p.material = k === 'glow' ? glowMat : (state.mode === 'wire' ? wireMat : KINDS[k]);
+  }
+}
+function suitSet(on) {
+  state.suitOn = on;
+  return on ? 'Anzug wird zusammengesetzt.' : 'Anzug wird abgelegt.';
+}
+function focusTo(k) {
+  state.focus = k;
+  view.focusYT = FOCUS[k].y;
+  view.distT = FOCUS[k].d;
+}
+function resetView() {
+  state.mode = 'wire'; applyMode();
+  state.glow = false; state.autoRot = true;
+  focusTo('all'); view.rotYT = 0; view.rotXT = 0;
+}
+function syncButtons() {
+  $('bSuit').classList.toggle('on', state.suitOn);
+  $('bMode').classList.toggle('on', state.mode === 'color');
+  $('bGlow').classList.toggle('on', state.glow);
+  $('bRot').classList.toggle('on', state.autoRot);
+  document.querySelectorAll('[data-focus]').forEach(b => b.classList.toggle('on', b.dataset.focus === state.focus));
+}
+
+// Führt eine vom Server geprüfte Aktion aus
+function runAction(a) {
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  switch (a.type) {
+    case 'set_mark':  state.mark = a.mark; applyMark(); return `${MARKS[a.mark].name} geladen.`;
+    case 'set_mode':  state.mode = a.mode; applyMode(); return a.mode === 'wire' ? 'Drahtgittermodell aktiv.' : 'Farbmodus aktiv.';
+    case 'set_glow':  state.glow = a.on; return a.on ? 'Beleuchtung an.' : 'Beleuchtung aus.';
+    case 'set_suit':  return suitSet(a.on);
+    case 'zoom':
+      if (a.direction === 'in') view.distT = clamp(view.distT * 0.7, 2.8, 16);
+      else if (a.direction === 'out') view.distT = clamp(view.distT * 1.4, 2.8, 16);
+      else view.distT = clamp(a.distance, 2.8, 16);
+      return null;
+    case 'focus':     focusTo(a.target); return `Fokus auf ${FOCUS[a.target].label}.`;
+    case 'rotate':
+      if (typeof a.degrees === 'number') view.rotYT += a.degrees * Math.PI / 180;
+      if (typeof a.auto === 'boolean') state.autoRot = a.auto;
+      return null;
+    case 'reset':     resetView(); return 'Ansicht zurückgesetzt.';
+  }
+  return null;
+}
+
+// ============ Protokoll ============
+function log(who, text, cls) {
+  const d = document.createElement('div');
+  d.className = cls || who;
+  d.textContent = (who === 'me' ? '> ' : who === 'ai' ? 'J.A.R.V.I.S.: ' : '') + text;
+  $('log').appendChild(d);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+function showError(msg) { log('err', '⚠ ' + msg, 'err'); }
+function setStatus(txt) { $('status').textContent = txt; }
+
+// ============ Audio: Ausgabe mit Analyser (für den Puls) ============
+let actx = null, analyser = null, anaData = null, currentSrc = null, speaking = false;
+
+function unlockAudio() {
+  try {
+    if (!actx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      actx = new AC();
+      analyser = actx.createAnalyser();
+      analyser.fftSize = 256;
+      anaData = new Uint8Array(analyser.frequencyBinCount);
+      analyser.connect(actx.destination);
+    }
+    if (actx.state === 'suspended') actx.resume();
+  } catch (e) { console.warn('Audio-Init fehlgeschlagen', e); }
+}
+// iOS erlaubt Ton erst nach einer Berührung: bei jedem Tipp freischalten
+window.addEventListener('pointerdown', unlockAudio, { passive: true });
+window.addEventListener('keydown', unlockAudio);
+
+function stopSpeech() {
+  if (currentSrc) { try { currentSrc.stop(); } catch (e) {} currentSrc = null; }
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  speaking = false;
+}
+
+function fallbackSpeech(text) {
+  if (!('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'de-DE';
+  u.onstart = () => speaking = true;
+  u.onend = () => speaking = false;
+  speechSynthesis.speak(u);
+}
+
+async function speak(text) {
+  unlockAudio();
+  try {
+    const r = await fetch(API + '/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) throw new Error(`Server ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    const data = await r.arrayBuffer();
+    if (!actx) throw new Error('Audio nicht bereit, bitte einmal auf die Seite tippen');
+    const buffer = await actx.decodeAudioData(data);
+    stopSpeech();
+    const src = actx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(analyser);
+    src.onended = () => { if (currentSrc === src) { currentSrc = null; speaking = false; } };
+    currentSrc = src;
+    speaking = true;
+    src.start();
+  } catch (e) {
+    showError('Fish-Stimme: ' + e.message + ' (Ersatzstimme aktiv)');
+    fallbackSpeech(text);
+  }
+}
+
+function say(text) {
+  log('ai', text);
+  setStatus('ANTWORT');
+  speak(text);
+}
+
+// ============ Befehle: Text oder Sprache -> Server -> Aktionen ============
+async function handle(raw) {
+  const text = (raw || '').trim();
+  if (!text) return;
+  log('me', text);
+  setStatus('DENKT');
+  try {
+    const r = await fetch(API + '/intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, context: {
+        mark: state.mark, mode: state.mode, glow: state.glow,
+        suitOn: state.suitOn, autoRot: state.autoRot, focus: state.focus } }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    const msgs = data.actions.map(runAction).filter(Boolean);
+    syncButtons();
+    if (data.actions.length === 0 && !data.reply) {
+      return say('Das habe ich nicht verstanden. Versuchen Sie zum Beispiel: zeig mir Mark 45 in Farbe.');
+    }
+    say(data.reply || msgs.join(' ') || 'Erledigt.');
+  } catch (e) {
+    showError('Befehl fehlgeschlagen: ' + e.message);
+    setStatus('ONLINE');
+  }
+}
+
+$('cmd').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { const v = e.target.value; e.target.value = ''; handle(v); }
+});
+
+// ============ Sprache: Aufnahme -> Server -> Groq Whisper ============
+let recorder = null, chunks = [], micStream = null;
+
+function setRecUI(on) {
+  recording = on;
+  $('mic').classList.toggle('rec', on);
+  $('jarvis').classList.toggle('active', on);
+  reactorSprite.material.color.setHex(on ? 0xffb84d : MARKS[state.mark].reactor);
+  setStatus(on ? 'HÖRT ZU' : 'ONLINE');
+}
+
+async function startRec() {
+  unlockAudio();
+  if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {
+    return showError('Aufnahme wird in diesem Browser nicht unterstützt. Bitte das Textfeld nutzen.');
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    return showError('Mikrofon: ' + e.message);
+  }
+  const preferred = ['audio/webm', 'audio/mp4'];
+  const mime = typeof MediaRecorder.isTypeSupported === 'function'
+    ? preferred.find(t => MediaRecorder.isTypeSupported(t)) : undefined;
+  recorder = mime ? new MediaRecorder(micStream, { mimeType: mime }) : new MediaRecorder(micStream);
+  chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  recorder.onstop = finishRec;
+  recorder.start();
+  setRecUI(true);
+}
+
+async function finishRec() {
+  micStream.getTracks().forEach(t => t.stop());
+  setRecUI(false);
+  const type = recorder.mimeType || 'audio/webm';
+  const blob = new Blob(chunks, { type });
+  if (blob.size < 1000) return showError('Aufnahme zu kurz. Bitte etwas länger sprechen.');
+  setStatus('DENKT');
+  try {
+    const r = await fetch(API + '/stt', {
+      method: 'POST',
+      headers: { 'Content-Type': type },
+      body: blob,
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (data.text && data.text.trim()) handle(data.text);
+    else showError('Ich habe nichts verstanden.');
+  } catch (e) {
+    showError('Spracherkennung: ' + e.message);
+    setStatus('ONLINE');
+  }
+}
+
+$('mic').onclick = () => { if (recording) recorder.stop(); else startRec(); };
+$('stop').onclick = () => {
+  if (recording) recorder.stop();
+  stopSpeech();
+  setStatus('ONLINE');
+};
+
+// ============ Schnellbuttons (lokal, kosten nichts) ============
+for (const id of Object.keys(MARKS)) {
+  const b = document.createElement('button');
+  b.dataset.mark = id;
+  b.textContent = MARKS[id].name;
+  b.onclick = () => { state.mark = id; applyMark(); say(`${MARKS[id].name} geladen.`); };
+  $('marks').appendChild(b);
+}
+$('bSuit').onclick = () => { say(suitSet(!state.suitOn)); syncButtons(); };
+$('bMode').onclick = () => { state.mode = state.mode === 'wire' ? 'color' : 'wire'; applyMode(); syncButtons(); };
+$('bGlow').onclick = () => { state.glow = !state.glow; syncButtons(); };
+$('bRot').onclick  = () => { state.autoRot = !state.autoRot; syncButtons(); };
+$('bReset').onclick = () => { resetView(); syncButtons(); say('Ansicht zurückgesetzt.'); };
+document.querySelectorAll('[data-focus]').forEach(b =>
+  b.onclick = () => { focusTo(b.dataset.focus); syncButtons(); });
+$('menuBtn').onclick = () => $('left').classList.toggle('open');
+
+// ============ Maus & Touch: ziehen zum Drehen, Rad zum Zoomen ============
+const canvas = renderer.domElement;
+let lastX = 0, lastY = 0;
+canvas.addEventListener('pointerdown', e => { view.drag = true; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener('pointerup', () => view.drag = false);
+window.addEventListener('pointermove', e => {
+  if (!view.drag) return;
+  view.rotYT += (e.clientX - lastX) * 0.01;
+  view.rotXT = Math.max(-0.5, Math.min(0.5, view.rotXT + (e.clientY - lastY) * 0.005));
+  lastX = e.clientX; lastY = e.clientY;
+});
+canvas.addEventListener('wheel', e => {
+  view.distT = Math.max(2.8, Math.min(16, view.distT * (1 + e.deltaY * 0.001)));
+}, { passive: true });
+
+// ============ Größe & Animationsschleife ============
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+let last = performance.now(), t = 0, audioLevel = 0;
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now; t += dt;
+  const k = 1 - Math.pow(0.02, dt); // frame-rate-unabhängiges Easing
+
+  // Audiopegel der Sprachausgabe
+  let target = 0;
+  if (currentSrc && analyser) {
+    analyser.getByteFrequencyData(anaData);
+    let s = 0;
+    for (let i = 1; i < 40; i++) s += anaData[i];
+    target = Math.min(1, (s / 39) / 150);
+  } else if (speaking) {
+    target = 0.3 + 0.2 * Math.sin(t * 12);
+  }
+  audioLevel += (target - audioLevel) * (target > audioLevel ? 0.45 : 0.08);
+
+  if (state.autoRot && !view.drag) view.rotYT += dt * 0.15;
+  view.rotY += (view.rotYT - view.rotY) * k;
+  view.rotX += (view.rotXT - view.rotX) * k;
+  view.dist += (view.distT - view.dist) * k;
+  view.focusY += (view.focusYT - view.focusY) * k;
+
+  camera.position.set(0, view.focusY, view.dist);
+  camera.lookAt(0, view.focusY, 0);
+  suit.rotation.y = view.rotY;
+  suit.rotation.x = view.rotX;
+  suit.position.y = Math.sin(t * 0.8) * 0.04 + audioLevel * 0.05;
+
+  // Teile fliegen zusammen oder lösen sich
+  const pk = 1 - Math.pow(0.04, dt);
+  for (const m of parts) {
+    const ud = m.userData;
+    m.position.lerp(state.suitOn ? ud.home : ud.scatter, pk);
+    for (let i = 0; i < 3; i++) {
+      const axis = ['x','y','z'][i];
+      if (state.suitOn) m.rotation[axis] += (ud.base[i] - m.rotation[axis]) * pk;
+      else m.rotation[axis] += dt * ud.spin[i];
+    }
+  }
+
+  // Reaktor und Beleuchtung
+  mainMat.emissiveIntensity += ((state.glow ? 0.35 : 0) + audioLevel * 0.3 - mainMat.emissiveIntensity) * k;
+  reactorLight.intensity += ((state.glow ? 2.5 : 0.6) + audioLevel * 4 - reactorLight.intensity) * k;
+  const pulse = 1 + 0.06 * Math.sin(t * 3) + audioLevel * 0.35;
+  reactorSprite.scale.setScalar(1.2 * pulse);
+  reactorSprite.material.opacity += ((state.glow ? 0.95 : 0.5) - reactorSprite.material.opacity) * k;
+
+  // Punktnetz reagiert auf die KI-Stimme
+  network.rotation.y += dt * (0.04 + audioLevel * 0.25);
+  network.rotation.x = 0.25 + Math.sin(t * 0.1) * 0.1;
+  network.scale.setScalar(1 + audioLevel * 0.05);
+  netLineMat.opacity += ((0.18 + audioLevel * 0.5) - netLineMat.opacity) * k;
+  netDotMat.opacity += ((0.9 + audioLevel * 0.1) - netDotMat.opacity) * k;
+
+  $('jarvis').classList.toggle('active', recording || audioLevel > 0.05);
+  if (!recording && !speaking && audioLevel < 0.02 && $('status').textContent === 'ANTWORT') setStatus('ONLINE');
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// ============ Start ============
+applyMode();
+applyMark();
+syncButtons();
+const tick = () => $('clock').textContent = new Date().toLocaleTimeString('de-DE');
+tick();
+setInterval(tick, 1000);
+requestAnimationFrame(frame);
+log('ai', 'Guten Tag, Sir. Tippen Sie einmal auf die Seite, damit die Stimme aktiviert wird.');
+</script>
+</body>
+</html>
