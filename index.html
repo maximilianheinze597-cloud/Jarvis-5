@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>J.A.R.V.I.S. – Anzug-Interface</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root { --cy:#52e0ff; --cy2:#1b6b82; --gold:#e8b04b; --bg:#03070c; --panel:rgba(6,20,30,.8); }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--cy);
+    font-family:Consolas, Menlo, monospace; overflow:hidden; }
+  #scene { position:fixed; inset:0; }
+  #scene canvas { display:block; touch-action:none; }
+  .hud { position:fixed; inset:0; pointer-events:none; }
+  .panel { position:absolute; background:var(--panel); border:1px solid var(--cy2); border-radius:6px;
+    padding:10px 12px; box-shadow:0 0 18px rgba(82,224,255,.15); pointer-events:auto; }
+  #left { left:12px; top:12px; width:220px; }
+  #right { right:12px; top:12px; width:300px; max-height:calc(100% - 24px); overflow:auto; }
+  #clock { position:absolute; top:14px; left:50%; transform:translateX(-50%); font-size:22px;
+    letter-spacing:.15em; text-shadow:0 0 10px var(--cy); }
+  h3 { margin:0 0 8px; font-size:11px; letter-spacing:.2em; color:var(--gold); font-weight:normal; }
+  button { background:transparent; color:var(--cy); border:1px solid var(--cy2); padding:8px;
+    margin:3px 0; width:100%; text-align:left; font:inherit; font-size:13px; cursor:pointer; border-radius:3px; }
+  button:hover, button.on { border-color:var(--cy); background:rgba(82,224,255,.12); }
+  .row { display:flex; gap:6px; } .row button { text-align:center; }
+  #bar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); display:flex; gap:8px;
+    width:min(640px,94vw); pointer-events:auto; }
+  #cmd { flex:1; min-width:0; background:rgba(6,20,30,.9); border:1px solid var(--cy2); color:var(--cy);
+    padding:10px; font:inherit; font-size:16px; border-radius:4px; }
+  #cmd:focus { outline:none; border-color:var(--cy); }
+  #mic { width:auto; padding:10px 14px; }
+  #mic.rec { border-color:var(--gold); color:var(--gold); }
+  #log { font-size:13px; line-height:1.5; max-height:260px; overflow:auto; }
+  #log .me { color:#9fb7c2; } #log .ai { color:var(--gold); }
+  #status { font-size:12px; opacity:.85; margin-top:8px; min-height:14px; }
+  .note { font-size:11px; opacity:.6; line-height:1.5; }
+  @media (max-width:700px) {
+    #left { width:170px; top:auto; bottom:80px; left:8px; }
+    #right { display:none; }
+  }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+
+<div class="hud">
+  <div id="clock">--:--:--</div>
+
+  <div class="panel" id="left">
+    <h3>ANZUG-AUSWAHL</h3>
+    <div id="marks"></div>
+    <h3 style="margin-top:12px">STEUERUNG</h3>
+    <button id="bSuit">Anzug an / aus</button>
+    <button id="bMode">Farbe / Draht</button>
+    <button id="bGlow">Beleuchten</button>
+    <button id="bRot">Auto-Rotation</button>
+    <button id="bReset">Ansicht zurücksetzen</button>
+    <h3 style="margin-top:12px">FOKUS</h3>
+    <div class="row">
+      <button data-focus="helm">Helm</button>
+      <button data-focus="reaktor">Reaktor</button>
+    </div>
+    <div class="row">
+      <button data-focus="beine">Beine</button>
+      <button data-focus="all">Gesamt</button>
+    </div>
+  </div>
+
+  <div class="panel" id="right">
+    <h3>J.A.R.V.I.S. PROTOKOLL</h3>
+    <div id="log"></div>
+    <div id="status"></div>
+    <h3 style="margin-top:12px">BEISPIELE</h3>
+    <div class="note">
+      „zeig mir Mark 45 in Farbe“ · „mach ihn größer und zeig mir die Rückseite“ ·
+      „zeig mir den Draht“ · „beleuchte das“ · „schalte den Anzug aus“ · „reset“
+    </div>
+  </div>
+
+  <div id="bar">
+    <input id="cmd" placeholder="Befehl eingeben…" autocomplete="off">
+    <button id="mic">🎙 Sprechen</button>
+  </div>
+</div>
+
+<script>
+// ============ Server-Adresse (nur die öffentliche Funktions-URL, keine Schlüssel) ============
+const API = 'https://vnrssfuohdgqfzfmvnih.supabase.co/functions/v1/index';
+
+// ============ Daten ============
+const MARKS = {
+  '1':  { name:'Mark 1',  primary:0x8a8f99, accent:0xc2402e, reactor:0x52e0ff },
+  '5':  { name:'Mark 5',  primary:0xb3262b, accent:0xd9a441, reactor:0x52e0ff },
+  '42': { name:'Mark 42', primary:0xc62d2d, accent:0xf0c05a, reactor:0x7af0ff },
+  '45': { name:'Mark 45', primary:0xa81e25, accent:0xe8b04b, reactor:0x8ff3ff },
+  '50': { name:'Mark 50', primary:0xd9dde3, accent:0xf3c64f, reactor:0x52e0ff },
+};
+const FOCUS = {
+  helm:    { y: 2.0,  d: 4.2, label: 'Helm' },
+  reaktor: { y: 1.2,  d: 3.6, label: 'Reaktor' },
+  beine:   { y: -1.2, d: 5.5, label: 'Beine' },
+  all:     { y: 0.2,  d: 9,   label: 'Gesamtansicht' },
+};
+
+// ============ Zustand ============
+const state = { mark:'5', mode:'color', glow:false, suitOn:true, autoRot:true, focus:'all' };
+const view  = { dist:9, distT:9, rotY:0, rotYT:0, rotX:0, rotXT:0, focusY:0.2, focusYT:0.2, drag:false };
+const $ = id => document.getElementById(id);
+
+// ============ Three.js ============
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+$('scene').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+
+scene.add(new THREE.AmbientLight(0x406070, 0.6));
+const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(3, 5, 4); scene.add(key);
+const rim = new THREE.DirectionalLight(0x52e0ff, 0.8); rim.position.set(-4, 2, -3); scene.add(rim);
+
+// Partikel-Kugel im Hintergrund
+const globe = new THREE.Group(); scene.add(globe);
+{
+  const N = 600, pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u);
+    pos[i*3] = r * Math.cos(th) * 4.6; pos[i*3+1] = u * 4.6; pos[i*3+2] = r * Math.sin(th) * 4.6;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  globe.add(new THREE.Points(g, new THREE.PointsMaterial({ color:0x52e0ff, size:0.035, transparent:true, opacity:0.55 })));
+}
+
+// Materialien (geteilt, damit ein Mark-Wechsel alle Teile gleichzeitig färbt)
+const mainMat   = new THREE.MeshStandardMaterial({ color:0xb3262b, metalness:0.75, roughness:0.3, emissive:0xd9a441, emissiveIntensity:0 });
+const accentMat = new THREE.MeshStandardMaterial({ color:0xd9a441, metalness:0.9, roughness:0.25 });
+const glowMat   = new THREE.MeshBasicMaterial({ color:0x52e0ff });
+const wireMat   = new THREE.MeshBasicMaterial({ color:0x52e0ff, wireframe:true, transparent:true, opacity:0.8 });
+const KINDS = { main:mainMat, accent:accentMat, glow:glowMat };
+
+// Anzugteile (vereinfacht aus Grundformen, eigene Modelle lassen sich hier einsetzen)
+const P = (g, x, y, z, k, s=[1,1,1], r=[0,0,0]) => ({ g, x, y, z, k, s, r });
+const SPEC = [
+  P(() => new THREE.SphereGeometry(0.44, 32, 24), 0, 2.2, 0, 'main', [0.92,1.08,1]),
+  P(() => new THREE.BoxGeometry(0.6, 0.2, 0.1), 0, 2.12, 0.38, 'glow'),
+  P(() => new THREE.CylinderGeometry(0.18, 0.22, 0.24, 20), 0, 1.66, 0, 'accent'),
+  P(() => new THREE.BoxGeometry(1.25, 1.0, 0.66), 0, 1.15, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.9, 0.6, 0.52), 0, 0.27, 0, 'accent'),
+  P(() => new THREE.CylinderGeometry(0.2, 0.2, 0.08, 32), 0, 1.2, 0.36, 'glow', [1,1,1], [Math.PI/2,0,0]),
+  P(() => new THREE.TorusGeometry(0.28, 0.035, 12, 48), 0, 1.2, 0.38, 'accent'),
+  P(() => new THREE.SphereGeometry(0.3, 20, 16), -0.82, 1.6, 0, 'main'),
+  P(() => new THREE.SphereGeometry(0.3, 20, 16),  0.82, 1.6, 0, 'main'),
+  P(() => new THREE.CylinderGeometry(0.16, 0.14, 0.75, 16), -0.95, 1.12, 0, 'main'),
+  P(() => new THREE.CylinderGeometry(0.16, 0.14, 0.75, 16),  0.95, 1.12, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.3, 0.75, 0.3), -1.0, 0.3, 0, 'accent'),
+  P(() => new THREE.BoxGeometry(0.3, 0.75, 0.3),  1.0, 0.3, 0, 'accent'),
+  P(() => new THREE.SphereGeometry(0.2, 16, 12), -1.0, -0.13, 0, 'main'),
+  P(() => new THREE.SphereGeometry(0.2, 16, 12),  1.0, -0.13, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.36, 0.9, 0.36), -0.3, -0.6, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.36, 0.9, 0.36),  0.3, -0.6, 0, 'main'),
+  P(() => new THREE.BoxGeometry(0.34, 0.85, 0.34), -0.3, -1.55, 0, 'accent'),
+  P(() => new THREE.BoxGeometry(0.34, 0.85, 0.34),  0.3, -1.55, 0, 'accent'),
+  P(() => new THREE.BoxGeometry(0.4, 0.2, 0.6), -0.3, -2.05, 0.1, 'main'),
+  P(() => new THREE.BoxGeometry(0.4, 0.2, 0.6),  0.3, -2.05, 0.1, 'main'),
+];
+
+const suit = new THREE.Group(); scene.add(suit);
+const parts = [];
+for (const sp of SPEC) {
+  const mesh = new THREE.Mesh(sp.g(), KINDS[sp.k]);
+  mesh.scale.set(...sp.s);
+  mesh.rotation.set(...sp.r);
+  const home = new THREE.Vector3(sp.x, sp.y, sp.z);
+  mesh.position.copy(home);
+  const dir = home.clone().normalize();
+  if (!isFinite(dir.x)) dir.set(0, 1, 0);
+  const scatter = dir.multiplyScalar(2.6).add(new THREE.Vector3(
+    (Math.random()-0.5)*1.2, (Math.random()-0.5)*1.2, (Math.random()-0.5)*1.2));
+  mesh.userData = { home, scatter, base:sp.r, solid:KINDS[sp.k],
+    spin:[(Math.random()-0.5)*3, (Math.random()-0.5)*3, (Math.random()-0.5)*3] };
+  suit.add(mesh);
+  parts.push(mesh);
+}
+
+const reactorLight = new THREE.PointLight(0x52e0ff, 0, 6);
+reactorLight.position.set(0, 1.2, 0.9);
+suit.add(reactorLight);
+
+// ============ Anwendung ============
+function applyMark() {
+  const m = MARKS[state.mark];
+  mainMat.color.setHex(m.primary);
+  mainMat.emissive.setHex(m.accent);
+  accentMat.color.setHex(m.accent);
+  glowMat.color.setHex(m.reactor);
+  reactorLight.color.setHex(m.reactor);
+  document.querySelectorAll('[data-mark]').forEach(b => b.classList.toggle('on', b.dataset.mark === state.mark));
+}
+function applyMode() {
+  for (const p of parts) p.material = state.mode === 'wire' ? wireMat : p.userData.solid;
+}
+function suitSet(on) {
+  state.suitOn = on;
+  return on ? 'Anzug wird zusammengesetzt.' : 'Anzug wird abgelegt.';
+}
+function focusTo(k) {
+  state.focus = k;
+  view.focusYT = FOCUS[k].y;
+  view.distT = FOCUS[k].d;
+}
+function resetView() {
+  state.mode = 'color'; applyMode();
+  state.glow = false; state.autoRot = true;
+  focusTo('all'); view.rotYT = 0; view.rotXT = 0;
+}
+function syncButtons() {
+  $('bSuit').classList.toggle('on', state.suitOn);
+  $('bMode').classList.toggle('on', state.mode === 'wire');
+  $('bGlow').classList.toggle('on', state.glow);
+  $('bRot').classList.toggle('on', state.autoRot);
+  document.querySelectorAll('[data-focus]').forEach(b => b.classList.toggle('on', b.dataset.focus === state.focus));
+}
+
+// Führt eine erlaubte Aktion aus (der Server hat sie bereits geprüft)
+function runAction(a) {
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  switch (a.type) {
+    case 'set_mark':
+      state.mark = a.mark; applyMark();
+      return `${MARKS[a.mark].name} geladen.`;
+    case 'set_mode':
+      state.mode = a.mode; applyMode();
+      return a.mode === 'wire' ? 'Drahtgittermodell aktiv.' : 'Farbmodus aktiv.';
+    case 'set_glow':
+      state.glow = a.on;
+      return a.on ? 'Beleuchtung an.' : 'Beleuchtung aus.';
+    case 'set_suit':
+      return suitSet(a.on);
+    case 'zoom':
+      if (a.direction === 'in') view.distT = clamp(view.distT * 0.7, 2.8, 16);
+      else if (a.direction === 'out') view.distT = clamp(view.distT * 1.4, 2.8, 16);
+      else view.distT = clamp(a.distance, 2.8, 16);
+      return null;
+    case 'focus':
+      focusTo(a.target);
+      return `Fokus auf ${FOCUS[a.target].label}.`;
+    case 'rotate':
+      if (typeof a.degrees === 'number') view.rotYT += a.degrees * Math.PI / 180;
+      if (typeof a.auto === 'boolean') state.autoRot = a.auto;
+      return null;
+    case 'reset':
+      resetView();
+      return 'Ansicht zurückgesetzt.';
+  }
+  return null;
+}
+
+// ============ Protokoll & Stimme ============
+function log(who, text) {
+  const d = document.createElement('div');
+  d.className = who;
+  d.textContent = (who === 'me' ? '> ' : 'J.A.R.V.I.S.: ') + text;
+  $('log').appendChild(d);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+
+let currentAudio = null;
+async function speak(text) {
+  try {
+    const r = await fetch(API + '/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const url = URL.createObjectURL(await r.blob());
+    if (currentAudio) currentAudio.pause();
+    currentAudio = new Audio(url);
+    currentAudio.onended = () => URL.revokeObjectURL(url);
+    await currentAudio.play();
+  } catch (e) {
+    console.warn('Fish-Stimme nicht verfügbar, nutze Browserstimme:', e);
+    if ('speechSynthesis' in window) {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'de-DE';
+      speechSynthesis.speak(u);
+    }
+  }
+}
+function say(text) {
+  log('ai', text);
+  $('status').textContent = text;
+  speak(text);
+}
+
+// ============ Befehle: Text oder Sprache -> Server -> Aktionen ============
+async function handle(raw) {
+  const text = (raw || '').trim();
+  if (!text) return;
+  log('me', text);
+  try {
+    const r = await fetch(API + '/intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, context: {
+        mark: state.mark, mode: state.mode, glow: state.glow,
+        suitOn: state.suitOn, autoRot: state.autoRot, focus: state.focus } }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+
+    const msgs = data.actions.map(runAction).filter(Boolean);
+    syncButtons();
+
+    if (data.actions.length === 0 && !data.reply) {
+      return say('Das habe ich nicht verstanden. Versuchen Sie zum Beispiel: zeig mir Mark 45 in Farbe.');
+    }
+    say(data.reply || msgs.join(' ') || 'Erledigt.');
+  } catch (e) {
+    say('Der Server antwortet nicht: ' + e.message);
+  }
+}
+
+// ============ Eingabe: Text ============
+$('cmd').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { const v = e.target.value; e.target.value = ''; handle(v); }
+});
+
+// ============ Eingabe: Sprache (Aufnahme -> Server -> Groq Whisper) ============
+const micBtn = $('mic');
+let recorder = null, chunks = [];
+
+micBtn.onclick = async () => {
+  if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    return say('Aufnahme wird von diesem Browser nicht unterstützt. Bitte das Textfeld nutzen.');
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recorder = new MediaRecorder(stream);
+    chunks = [];
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      micBtn.classList.remove('rec');
+      micBtn.textContent = '… erkenne';
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+      try {
+        const r = await fetch(API + '/stt', {
+          method: 'POST',
+          headers: { 'Content-Type': blob.type },
+          body: blob,
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || r.statusText);
+        if (data.text) handle(data.text);
+        else say('Ich habe nichts verstanden.');
+      } catch (e) {
+        say('Spracherkennung fehlgeschlagen: ' + e.message);
+      } finally {
+        micBtn.textContent = '🎙 Sprechen';
+      }
+    };
+    recorder.start();
+    micBtn.classList.add('rec');
+    micBtn.textContent = '● Aufnahme stoppen';
+  } catch (e) {
+    say('Mikrofon nicht verfügbar: ' + e.message);
+  }
+};
+
+// ============ Schnellbuttons ============
+for (const id of Object.keys(MARKS)) {
+  const b = document.createElement('button');
+  b.dataset.mark = id;
+  b.textContent = MARKS[id].name;
+  b.onclick = () => { state.mark = id; applyMark(); say(`${MARKS[id].name} geladen.`); };
+  $('marks').appendChild(b);
+}
+$('bSuit').onclick = () => { say(suitSet(!state.suitOn)); syncButtons(); };
+$('bMode').onclick = () => { state.mode = state.mode === 'wire' ? 'color' : 'wire'; applyMode(); syncButtons(); };
+$('bGlow').onclick = () => { state.glow = !state.glow; syncButtons(); };
+$('bRot').onclick  = () => { state.autoRot = !state.autoRot; syncButtons(); };
+$('bReset').onclick = () => { resetView(); syncButtons(); say('Ansicht zurückgesetzt.'); };
+document.querySelectorAll('[data-focus]').forEach(b =>
+  b.onclick = () => { focusTo(b.dataset.focus); syncButtons(); });
+
+// ============ Maus & Touch: ziehen zum Drehen, Rad zum Zoomen ============
+const canvas = renderer.domElement;
+let lastX = 0, lastY = 0;
+canvas.addEventListener('pointerdown', e => { view.drag = true; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener('pointerup', () => view.drag = false);
+window.addEventListener('pointermove', e => {
+  if (!view.drag) return;
+  view.rotYT += (e.clientX - lastX) * 0.01;
+  view.rotXT = Math.max(-0.5, Math.min(0.5, view.rotXT + (e.clientY - lastY) * 0.005));
+  lastX = e.clientX; lastY = e.clientY;
+});
+canvas.addEventListener('wheel', e => {
+  view.distT = Math.max(2.8, Math.min(16, view.distT * (1 + e.deltaY * 0.001)));
+}, { passive:true });
+
+// ============ Größe & Schleife ============
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+let last = performance.now(), t = 0;
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now; t += dt;
+  const k = 1 - Math.pow(0.02, dt); // frame-rate-unabhängiges Easing
+
+  if (state.autoRot && !view.drag) view.rotYT += dt * 0.2;
+  view.rotY += (view.rotYT - view.rotY) * k;
+  view.rotX += (view.rotXT - view.rotX) * k;
+  view.dist += (view.distT - view.dist) * k;
+  view.focusY += (view.focusYT - view.focusY) * k;
+
+  camera.position.set(0, view.focusY, view.dist);
+  camera.lookAt(0, view.focusY, 0);
+  suit.rotation.y = view.rotY;
+  suit.rotation.x = view.rotX;
+  suit.position.y = Math.sin(t * 0.8) * 0.04;
+
+  const pk = 1 - Math.pow(0.04, dt);
+  for (const m of parts) {
+    const ud = m.userData;
+    m.position.lerp(state.suitOn ? ud.home : ud.scatter, pk);
+    for (let i = 0; i < 3; i++) {
+      const axis = ['x','y','z'][i];
+      if (state.suitOn) m.rotation[axis] += (ud.base[i] - m.rotation[axis]) * pk;
+      else m.rotation[axis] += dt * ud.spin[i];
+    }
+  }
+
+  mainMat.emissiveIntensity += ((state.glow ? 0.35 : 0) - mainMat.emissiveIntensity) * k;
+  reactorLight.intensity += ((state.glow ? 2.5 + 0.4 * Math.sin(t * 3) : 0) - reactorLight.intensity) * k;
+
+  globe.rotation.y += dt * 0.05;
+  globe.rotation.x = 0.2;
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// ============ Start ============
+applyMode();
+applyMark();
+syncButtons();
+const tick = () => $('clock').textContent = new Date().toLocaleTimeString('de-DE');
+tick(); setInterval(tick, 1000);
+requestAnimationFrame(frame);
+say('Guten Tag, Sir. Anzug-Interface ist online. Sagen Sie zum Beispiel: zeig mir Mark 45 in Farbe.');
+</script>
+</body>
+</html>
