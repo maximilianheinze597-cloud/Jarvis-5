@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>J.A.R.V.I.S.</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#02060b">
+<link rel="manifest" href="manifest.json">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root { --c:#3fd0ff; --c2:#15506a; --g:#e7b04a; --o:#ff8a3d; --p:#a58cff; --red:#ff5c5c; --panel:rgba(3,14,24,.72); }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:#02060b; color:var(--c);
+    font-family:Consolas, Menlo, "Courier New", monospace; overflow:hidden;
+    -webkit-user-select:none; user-select:none; }
+  #scene { position:fixed; inset:0; }
+  #scene canvas { display:block; width:100%; height:100%; }
+  .hud { position:fixed; inset:0; pointer-events:none; }
+  .panel { position:absolute; pointer-events:auto; background:var(--panel); border:1px solid var(--c2);
+    padding:10px 12px; backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); }
+  #menu { left:14px; top:14px; width:236px; }
+  #menu h4 { margin:0 0 6px; font-size:11px; letter-spacing:.15em; font-weight:normal; }
+  .sec { font-size:9px; letter-spacing:.2em; margin:12px 0 4px; }
+  .sec.p { color:var(--p); } .sec.o { color:var(--o); } .sec.c { color:var(--c); }
+  .btn { display:block; width:100%; background:transparent; border:1px solid var(--c2); color:var(--c);
+    padding:7px 8px; margin:4px 0; text-align:left; font:inherit; font-size:11px; letter-spacing:.05em;
+    cursor:pointer; border-radius:2px; }
+  .btn:hover, .btn.on { border-color:var(--c); background:rgba(63,208,255,.12); }
+  .btn.o { border-color:#6b3a1a; color:var(--o); }
+  .row { display:flex; gap:6px; } .row .btn { text-align:center; }
+  #clock { position:absolute; top:12px; left:50%; transform:translateX(-50%); text-align:center; }
+  #clock .t { font-size:clamp(20px,3.2vw,32px); letter-spacing:.2em; text-shadow:0 0 12px var(--c); }
+  #clock .d { font-size:9px; letter-spacing:.25em; opacity:.7; margin-top:2px; }
+  #status { position:absolute; top:16px; right:16px; font-size:10px; letter-spacing:.2em; opacity:.85; }
+  #log { position:absolute; right:14px; top:14px; width:290px; max-height:55vh; display:flex; flex-direction:column; }
+  #logBox { overflow:auto; font-size:11px; line-height:1.5; max-height:40vh; }
+  #logBox .me { color:#9fc3cf; } #logBox .ai { color:var(--g); } #logBox .err { color:var(--red); }
+  #bar { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); display:flex; gap:10px;
+    align-items:center; width:min(640px,94vw); pointer-events:auto; }
+  #cmd { flex:1; min-width:0; background:rgba(3,14,24,.9); border:1px solid var(--c2); color:var(--c);
+    padding:12px; font:inherit; font-size:16px; border-radius:2px; }
+  #cmd:focus { outline:none; border-color:var(--c); }
+  .round { width:52px; height:52px; flex:0 0 52px; border-radius:50%; padding:0; margin:0;
+    display:flex; align-items:center; justify-content:center; font-size:18px; background:rgba(3,14,24,.9);
+    border:1px solid var(--c2); color:var(--c); cursor:pointer; }
+  .round.rec { border-color:var(--g); color:var(--g); box-shadow:0 0 16px rgba(231,176,74,.45); }
+  #menuBtn { display:none; position:absolute; left:12px; top:12px; pointer-events:auto; background:rgba(3,14,24,.8);
+    border:1px solid var(--c2); color:var(--c); padding:6px 10px; font:inherit; font-size:11px; }
+  @media (max-width:760px) {
+    #log { display:none; }
+    #menu { display:none; top:52px; left:8px; width:210px; }
+    #menu.open { display:block; }
+    #menuBtn { display:block; }
+    #clock { top:14px; }
+    #status { top:18px; }
+  }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+
+<div class="hud">
+  <button id="menuBtn">◆ MENÜ</button>
+
+  <div id="clock"><div class="t">--:--:--</div><div class="d" id="date">--</div></div>
+  <div id="status">ONLINE</div>
+
+  <div class="panel" id="menu">
+    <h4>◆ STEUERUNG // MENÜ</h4>
+    <div class="sec p">KI-STIMME</div>
+    <button class="btn" id="testVoice">Stimme testen</button>
+    <button class="btn" id="stop">Sprache stoppen</button>
+
+    <div class="sec o">MUSIK</div>
+    <button class="btn o" id="spOpen">Spotify öffnen</button>
+    <div style="font-size:10px;opacity:.6;line-height:1.5">Befehle wie „Spiel Bohemian Rhapsody“ öffnen die Suche. Den Titel startest du in der App.</div>
+
+    <div class="sec c">ANSICHT</div>
+    <div class="row">
+      <button class="btn" data-spin="on">Drehen</button>
+      <button class="btn" data-spin="off">Stopp</button>
+    </div>
+    <button class="btn" id="reset">Ansicht zurücksetzen</button>
+  </div>
+
+  <div class="panel" id="log">
+    <h4 style="margin:0 0 6px;font-size:11px;letter-spacing:.15em;font-weight:normal">◆ PROTOKOLL</h4>
+    <div id="logBox"></div>
+    <button class="btn" id="clearLog" style="margin-top:8px">Protokoll leeren</button>
+  </div>
+
+  <div id="bar">
+    <input id="cmd" placeholder="Befehl eingeben…" autocomplete="off">
+    <button id="mic" class="round" title="Sprechen">🎙</button>
+    <button id="stopBtn" class="round" title="Stopp">■</button>
+  </div>
+</div>
+
+<script>
+// ============ Konfiguration (keine Geheimnisse) ============
+const API = 'https://vnrssfuohdgqfzfmvnih.supabase.co/functions/v1/index';
+const $ = id => document.getElementById(id);
+let recording = false, recorder = null, chunks = [], micStream = null;
+let spinning = true;
+
+// ============ Three.js: Punktkugel mit Verbindungen (wie Foto) ============
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+$('scene').appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+camera.position.z = 9;
+
+const net = new THREE.Group();
+scene.add(net);
+const dotMat  = new THREE.PointsMaterial({ color: 0x9fe9ff, size: 0.07, transparent: true, opacity: 0.9 });
+const lineMat = new THREE.LineBasicMaterial({ color: 0x3fd0ff, transparent: true, opacity: 0.25 });
+{
+  const R = 3.2, N = 260, golden = Math.PI * (3 - Math.sqrt(5));
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    const y = 1 - 2 * (i + 0.5) / N, r = Math.sqrt(1 - y * y), th = golden * i;
+    pts.push(new THREE.Vector3(Math.cos(th) * r * R, y * R, Math.sin(th) * r * R));
+  }
+  // Einige Punkte im Inneren für Tiefe
+  for (let i = 0; i < 70; i++) {
+    const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u);
+    const rad = 1.2 + Math.random() * 1.6;
+    pts.push(new THREE.Vector3(r * Math.cos(th) * rad, u * rad, r * Math.sin(th) * rad));
+  }
+  const pos = new Float32Array(pts.length * 3);
+  pts.forEach((p, i) => { pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z; });
+  const dotGeo = new THREE.BufferGeometry();
+  dotGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  net.add(new THREE.Points(dotGeo, dotMat));
+
+  const lines = [];
+  for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+    if (pts[i].distanceTo(pts[j]) < 0.85) lines.push(pts[i].x, pts[i].y, pts[i].z, pts[j].x, pts[j].y, pts[j].z);
+  }
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+  net.add(new THREE.LineSegments(lineGeo, lineMat));
+}
+
+// ============ Protokoll & Status ============
+function log(who, text, cls) {
+  const d = document.createElement('div');
+  d.className = cls || who;
+  d.textContent = (who === 'me' ? '> ' : who === 'ai' ? 'J.A.R.V.I.S.: ' : '') + text;
+  $('logBox').appendChild(d);
+  $('logBox').scrollTop = $('logBox').scrollHeight;
+}
+function showError(msg) { log('err', '⚠ ' + msg, 'err'); }
+function setStatus(t) { $('status').textContent = t; }
+
+// ============ Stimme (Fish Audio über den Server) ============
+const audioEl = new Audio();
+let actx = null, analyser = null, anaData = null, unlocked = false, speaking = false, audioUrl = null;
+
+function silentWavUrl() {
+  // Kurze stumme WAV-Datei, damit iOS die Wiedergabe freigibt
+  const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+function unlockAudio() {
+  try {
+    if (!actx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      actx = new AC();
+      analyser = actx.createAnalyser();
+      analyser.fftSize = 256;
+      anaData = new Uint8Array(analyser.frequencyBinCount);
+      actx.createMediaElementSource(audioEl).connect(analyser);
+      analyser.connect(actx.destination);
+    }
+    if (actx.state === 'suspended') actx.resume();
+  } catch (e) { console.warn('Audio-Graph:', e); }
+  if (!unlocked) {
+    unlocked = true;
+    audioEl.src = silentWavUrl();
+    audioEl.play().catch(() => {});
+  }
+}
+window.addEventListener('pointerdown', unlockAudio, { passive: true });
+window.addEventListener('keydown', unlockAudio);
+
+audioEl.onplaying = () => { speaking = true; };
+audioEl.onended = audioEl.onpause = () => { speaking = false; };
+
+function stopSpeech() {
+  audioEl.pause();
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  speaking = false;
+}
+
+function fallbackSpeech(text) {
+  if (!('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'de-DE';
+  speechSynthesis.speak(u);
+}
+
+async function speak(text) {
+  unlockAudio();
+  try {
+    const r = await fetch(API + '/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) throw new Error(`Server ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    const blob = await r.blob();
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = URL.createObjectURL(blob);
+    audioEl.src = audioUrl;
+    await audioEl.play();
+  } catch (e) {
+    showError('Fish-Stimme: ' + e.message + ' (Ersatzstimme aktiv)');
+    fallbackSpeech(text);
+  }
+}
+
+function say(text) {
+  log('ai', text);
+  setStatus('ANTWORT');
+  speak(text);
+}
+
+// ============ Musik: öffnet die Spotify-Suche (ohne Premium) ============
+function openSpotifySearch(query) {
+  const app = query ? 'spotify:search:' + encodeURIComponent(query) : 'spotify:';
+  const web = query ? 'https://open.spotify.com/search/' + encodeURIComponent(query) : 'https://open.spotify.com/';
+  const a = document.createElement('a');
+  a.href = app;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => { if (!document.hidden) window.open(web, '_blank'); }, 1200);
+}
+
+function runMusic(a) {
+  if (a.op === 'play') {
+    openSpotifySearch(a.query);
+    return `Ich öffne die Suche nach ${a.query}. Tippen Sie dort auf Play.`;
+  }
+  return 'Die Steuerung von Spotify braucht ein Premium-Konto. Bitte bedienen Sie die Spotify-App direkt.';
+}
+
+// ============ Befehle: Text oder Sprache -> Server -> Aktionen ============
+async function handle(raw) {
+  const text = (raw || '').trim();
+  if (!text) return;
+  log('me', text);
+  setStatus('DENKT');
+  try {
+    const r = await fetch(API + '/intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, context: {} }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    const msgs = (data.actions || []).map(runMusic);
+    say(msgs.length ? msgs.join(' ') : (data.reply || 'Erledigt.'));
+  } catch (e) {
+    showError('Befehl fehlgeschlagen: ' + e.message);
+    setStatus('ONLINE');
+  }
+}
+
+$('cmd').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { const v = e.target.value; e.target.value = ''; handle(v); }
+});
+
+// ============ Sprache: Aufnahme -> Server -> Groq Whisper ============
+function setRecUI(on) {
+  recording = on;
+  $('mic').classList.toggle('rec', on);
+  setStatus(on ? 'HÖRT ZU' : 'ONLINE');
+}
+
+async function startRec() {
+  unlockAudio();
+  if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {
+    return showError('Aufnahme wird in diesem Browser nicht unterstützt. Bitte das Textfeld nutzen.');
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    return showError('Mikrofon: ' + e.message);
+  }
+  const mime = ['audio/webm', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
+  recorder = mime ? new MediaRecorder(micStream, { mimeType: mime }) : new MediaRecorder(micStream);
+  chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  recorder.onstop = finishRec;
+  recorder.start();
+  setRecUI(true);
+}
+
+async function finishRec() {
+  micStream.getTracks().forEach(t => t.stop());
+  setRecUI(false);
+  const type = recorder.mimeType || 'audio/webm';
+  const blob = new Blob(chunks, { type });
+  if (blob.size < 1000) return showError('Aufnahme zu kurz. Bitte etwas länger sprechen.');
+  setStatus('DENKT');
+  try {
+    const r = await fetch(API + '/stt', { method: 'POST', headers: { 'Content-Type': type }, body: blob });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (data.text && data.text.trim()) handle(data.text);
+    else showError('Ich habe nichts verstanden.');
+  } catch (e) {
+    showError('Spracherkennung: ' + e.message);
+    setStatus('ONLINE');
+  }
+}
+
+// ============ Buttons ============
+$('mic').onclick = () => { if (recording) recorder.stop(); else startRec(); };
+$('stopBtn').onclick = () => { if (recording) recorder.stop(); stopSpeech(); setStatus('ONLINE'); };
+$('stop').onclick = () => { stopSpeech(); setStatus('ONLINE'); };
+$('testVoice').onclick = () => say('Hallo, ich bin JARVIS. Die Stimmverbindung funktioniert.');
+$('spOpen').onclick = () => { openSpotifySearch(''); log('ai', 'Spotify wird geöffnet.'); };
+$('menuBtn').onclick = () => $('menu').classList.toggle('open');
+$('clearLog').onclick = () => { $('logBox').innerHTML = ''; };
+document.querySelectorAll('[data-spin]').forEach(b => b.onclick = () => {
+  spinning = b.dataset.spin === 'on';
+  document.querySelectorAll('[data-spin]').forEach(x => x.classList.toggle('on', x.dataset.spin === (spinning ? 'on' : 'off')));
+});
+$('reset').onclick = () => { net.rotation.set(0.25, 0, 0); spinning = true; say('Ansicht zurückgesetzt.'); };
+
+// Ziehen zum Drehen (Maus und Touch)
+let dragging = false, lx = 0, ly = 0;
+renderer.domElement.addEventListener('pointerdown', e => { dragging = true; lx = e.clientX; ly = e.clientY; });
+window.addEventListener('pointerup', () => dragging = false);
+window.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  net.rotation.y += (e.clientX - lx) * 0.005;
+  net.rotation.x = Math.max(-0.6, Math.min(0.6, net.rotation.x + (e.clientY - ly) * 0.005));
+  lx = e.clientX; ly = e.clientY;
+});
+
+// ============ Größe & Animation ============
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+let last = performance.now(), t = 0, level = 0;
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now; t += dt;
+  const k = 1 - Math.pow(0.02, dt);
+
+  // Pegel der Sprachausgabe
+  let target = 0;
+  if (analyser && speaking) {
+    analyser.getByteFrequencyData(anaData);
+    let s = 0;
+    for (let i = 1; i < 40; i++) s += anaData[i];
+    target = Math.min(1, (s / 39) / 150);
+  } else if (speaking) {
+    target = 0.3 + 0.2 * Math.sin(t * 12);
+  }
+  level += (target - level) * (target > level ? 0.45 : 0.08);
+
+  if (spinning && !dragging) net.rotation.y += dt * 0.08;
+  net.rotation.x += (0.25 + Math.sin(t * 0.1) * 0.08 - net.rotation.x) * 0.02;
+  net.scale.setScalar(1 + level * 0.05);
+
+  const lineTarget = recording ? 0.5 : 0.22 + level * 0.45;
+  lineMat.opacity += (lineTarget - lineMat.opacity) * k;
+  const lc = recording ? 0xe7b04a : 0x3fd0ff;
+  lineMat.color.setHex(lc);
+  dotMat.color.setHex(recording ? 0xffe2a8 : 0x9fe9ff);
+
+  $('mic').classList.toggle('rec', recording);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// ============ Start ============
+const tick = () => {
+  const d = new Date();
+  document.querySelector('#clock .t').textContent = d.toLocaleTimeString('de-DE');
+  document.getElementById('date').textContent = d.toLocaleDateString('de-DE', { weekday:'long', day:'2-digit', month:'long', year:'numeric' }).toUpperCase();
+};
+tick();
+setInterval(tick, 1000);
+requestAnimationFrame(frame);
+log('ai', 'Guten Tag, Sir. Tippen Sie einmal auf die Seite, damit die Stimme aktiviert wird.');
+</script>
+</body>
+</html>
