@@ -636,8 +636,9 @@ async function checkHealth() {
     let d = null;
     try { d = await r.json(); } catch {}
     if (r.status === 429) {
-      S.auth = 'blocked';
-      S.backend = { state: 'ok', at: new Date(), cfg: null, models: {} };
+      // Nur eine echte Code-Sperre sperrt die App. Ein normales Anfragelimit ändert den Zugangsstatus nicht.
+      if (d?.code === 'auth_blocked') S.auth = 'blocked';
+      S.backend = { state: 'ok', at: new Date(), cfg: S.backend.cfg || null, models: S.backend.models || {} };
     } else {
       if (!r.ok || d?.ok !== true) throw new Error('ungültig');
       if (typeof d.authorized !== 'boolean') S.auth = 'legacy';

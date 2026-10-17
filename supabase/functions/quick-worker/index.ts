@@ -39,7 +39,6 @@ const LIMITS = {
   rate: { windowMs: 60_000, max: 40 },
   healthRate: { windowMs: 60_000, max: 120 },
   authFailPerIp: { windowMs: 15 * 60_000, max: 10 },
-  authFailGlobal: { windowMs: 15 * 60_000, max: 50 },
 };
 
 const TIMEOUT = { chat: 30_000, stt: 40_000, tts: 40_000 };
@@ -154,16 +153,14 @@ async function checkCode(req: Request, ip: string): Promise<AuthState> {
   const secret = env("ACCESS_CODE");
   if (!secret) return "unconfigured";
   const ipKey = `authfail:${ip}`;
-  if (
-    rateLimited(ipKey, LIMITS.authFailPerIp, false) ||
-    rateLimited("authfail:global", LIMITS.authFailGlobal, false)
-  ) return "blocked";
+  // Nur pro IP sperren. Eine globale Sperre könnte jeder Fremde auslösen und damit auch dich aussperren.
+  // Gegen Raten schützt ein langer, zufälliger ACCESS_CODE (mindestens 12 Zeichen).
+  if (rateLimited(ipKey, LIMITS.authFailPerIp, false)) return "blocked";
   const provided = (req.headers.get("x-jarvis-code") ?? "").trim();
   if (!provided) return "missing";
   const ok = provided.length <= 200 && (await safeEqual(provided, secret));
   if (ok) return "ok";
   rateLimited(ipKey, LIMITS.authFailPerIp, true);
-  rateLimited("authfail:global", LIMITS.authFailGlobal, true);
   return "denied";
 }
 
