@@ -1,8 +1,0 @@
-{
-  "name": "J.A.R.V.I.S.",
-  "short_name": "JARVIS",
-  "start_url": "./",
-  "display": "standalone",
-  "background_color": "#02060b",
-  "theme_color": "#02060b"
-}
