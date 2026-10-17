@@ -1,0 +1,1189 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07090d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<link rel="manifest" href="manifest.json">
+<title>J.A.R.V.I.S.</title>
+<style>
+  :root {
+    --bg:#07090d; --panel:rgba(18,24,32,.72); --line:rgba(120,190,220,.16);
+    --text:#e6f1f7; --muted:#8fa2b2; --cyan:#4fd8ff; --ice:#bfefff;
+    --amber:#f0b35a; --red:#ff6b6b; --green:#6ee7a8; --grey:#5d6f7e;
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; }
+  body {
+    height:100vh; height:100dvh; overflow:hidden;
+    background:radial-gradient(120% 80% at 50% 0%, #0c1a26 0%, var(--bg) 60%);
+    color:var(--text); font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  [hidden] { display:none !important; }
+  .app { display:flex; flex-direction:column; height:100%; padding-top:env(safe-area-inset-top); }
+  .mono { font-family:ui-monospace, Menlo, Consolas, monospace; }
+
+  header.top {
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 16px; border-bottom:1px solid var(--line);
+  }
+  .brand { letter-spacing:.22em; font-size:13px; color:var(--ice); }
+  .conn { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin-top:3px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--grey); transition:background .3s; }
+  .clock { text-align:right; font-size:12px; color:var(--muted); }
+  .clock #time { font-size:14px; color:var(--text); }
+
+  main { flex:1; min-height:0; position:relative; }
+  .view {
+    position:absolute; inset:0; overflow:auto; padding:16px;
+    display:none; -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
+  }
+  .view.active { display:block; }
+  .stack { max-width:720px; margin:0 auto; display:flex; flex-direction:column; gap:12px; }
+
+  .assist { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100%; gap:18px; }
+  .core { position:relative; width:min(72vw, 300px); aspect-ratio:1; }
+  #orb { position:absolute; inset:0; width:100%; height:100%; }
+  .ring {
+    position:absolute; inset:-6px; border-radius:50%;
+    border:1px solid var(--line); border-top-color:var(--cyan);
+    animation:spin 7s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  body[data-core=listening] .ring { border-top-color:var(--amber); animation-duration:2.2s; }
+  body[data-core=thinking] .ring { animation-duration:1.3s; }
+  body[data-core=error] .ring { border-top-color:var(--red); animation:none; }
+  body[data-core=offline] .ring { border-top-color:var(--grey); animation:none; }
+  .state { letter-spacing:.3em; font-size:13px; color:var(--ice); }
+  body[data-core=error] .state { color:var(--red); }
+  body[data-core=offline] .state { color:var(--muted); }
+  body[data-core=listening] .state { color:var(--amber); }
+
+  body[data-core=idle] .dot { background:var(--green); }
+  body[data-core=listening] .dot { background:var(--amber); }
+  body[data-core=thinking] .dot, body[data-core=speaking] .dot { background:var(--cyan); }
+  body[data-core=error] .dot { background:var(--red); }
+  body[data-core=offline] .dot { background:var(--grey); }
+
+  .panel { width:100%; border:1px solid var(--line); border-radius:14px; background:var(--panel); padding:14px; }
+  .label { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
+  .preview { margin:0 0 10px; line-height:1.5; font-size:15px; white-space:pre-wrap; word-break:break-word; }
+  .hint { font-size:13px; color:var(--muted); line-height:1.5; margin:6px 0 0; }
+
+  .btn {
+    display:block; width:100%; min-height:44px; margin:0 0 8px; padding:12px 14px;
+    background:transparent; border:1px solid var(--line); color:var(--text); border-radius:12px;
+    font:inherit; font-size:15px; text-align:left; cursor:pointer;
+  }
+  .btn:disabled { opacity:.4; }
+  .btn.primary { border-color:rgba(79,216,255,.45); color:var(--ice); }
+  .btn.danger { border-color:rgba(255,107,107,.45); color:#ffc2c2; }
+  .btn[aria-pressed="true"] { border-color:var(--cyan); background:rgba(79,216,255,.1); }
+
+  .chip {
+    background:rgba(79,216,255,.08); border:1px solid rgba(79,216,255,.3); color:var(--ice);
+    border-radius:999px; padding:6px 12px; min-height:34px; margin:6px 6px 0 0;
+    font:inherit; font-size:13px; cursor:pointer;
+  }
+
+  #chat { max-width:720px; margin:0 auto; }
+  .msg { max-width:88%; margin:10px 0; padding:11px 13px; border-radius:14px; line-height:1.5; font-size:15px; }
+  .msg-body { white-space:pre-wrap; word-break:break-word; }
+  .msg.user { margin-left:auto; background:rgba(79,216,255,.14); border:1px solid rgba(79,216,255,.25); }
+  .msg.ai { background:rgba(255,255,255,.04); border:1px solid var(--line); }
+  .msg.system { margin:12px auto; max-width:100%; text-align:center; color:var(--muted); font-size:13px; }
+  .msg.err { border:1px solid rgba(255,107,107,.45); background:rgba(255,107,107,.08); color:#ffc2c2; }
+  .msg-meta { font-size:11px; color:var(--muted); margin-top:6px; }
+  .typing { font-size:13px; color:var(--muted); padding:6px 0; animation:pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.4; } }
+
+  footer { border-top:1px solid var(--line); background:rgba(7,9,13,.94); }
+  #composer { display:flex; align-items:flex-end; gap:8px; padding:10px 12px; }
+  #input {
+    flex:1; min-width:0; resize:none; max-height:120px; padding:11px 12px;
+    background:rgba(255,255,255,.04); border:1px solid var(--line); color:var(--text);
+    border-radius:12px; font:inherit; font-size:16px; line-height:1.4;
+  }
+  #input:focus { outline:none; border-color:rgba(79,216,255,.5); }
+  .icon {
+    width:44px; height:44px; flex:0 0 44px; display:flex; align-items:center; justify-content:center;
+    background:rgba(255,255,255,.03); border:1px solid var(--line); color:var(--ice);
+    border-radius:12px; cursor:pointer;
+  }
+  .icon:disabled { opacity:.35; }
+  .icon.primary { border-color:rgba(79,216,255,.5); background:rgba(79,216,255,.12); }
+  .icon.rec { border-color:var(--amber); color:var(--amber); box-shadow:0 0 14px rgba(240,179,90,.35); }
+  .icon svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+
+  nav.tabs {
+    display:grid; grid-template-columns:repeat(5,1fr); gap:4px;
+    padding:6px 6px calc(6px + env(safe-area-inset-bottom));
+  }
+  nav.tabs button {
+    background:none; border:0; color:var(--muted); font:inherit; font-size:12px;
+    min-height:44px; border-radius:10px; cursor:pointer; padding:6px 2px;
+  }
+  nav.tabs button.on { color:var(--cyan); background:rgba(79,216,255,.08); }
+
+  .grid { display:grid; gap:10px; grid-template-columns:1fr; }
+  @media (min-width:760px) { .grid { grid-template-columns:1fr 1fr; } }
+  .card { border:1px solid var(--line); border-left:3px solid var(--grey); border-radius:12px; padding:12px; background:var(--panel); }
+  .card.ok { border-left-color:var(--green); }
+  .card.error { border-left-color:var(--red); }
+  .card.pending { border-left-color:var(--amber); }
+  .card h3 { margin:0 0 6px; font-size:14px; font-weight:600; }
+  .card p { margin:3px 0; font-size:13px; color:var(--muted); word-break:break-word; line-height:1.4; }
+
+  .gate {
+    position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+    padding:max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    background:radial-gradient(120% 80% at 50% 0%, #0c1a26 0%, var(--bg) 60%);
+  }
+  .gate .panel { max-width:420px; }
+  .gate .brand { text-align:center; margin-bottom:14px; font-size:15px; }
+  .field {
+    display:block; width:100%; min-height:44px; margin:0 0 10px; padding:12px;
+    background:rgba(255,255,255,.04); border:1px solid var(--line); color:var(--text);
+    border-radius:12px; font:inherit; font-size:16px;
+  }
+  .field:focus { outline:none; border-color:rgba(79,216,255,.5); }
+  .gate-msg { min-height:20px; margin:0 0 10px; font-size:13px; line-height:1.4; color:var(--red); }
+  .gate-msg.info { color:var(--muted); }
+
+  @media (prefers-reduced-motion:reduce) {
+    .ring, .typing { animation:none; }
+  }
+</style>
+</head>
+<body data-core="idle">
+<div class="app">
+  <header class="top">
+    <div>
+      <div class="brand">J.A.R.V.I.S.</div>
+      <div class="conn"><span class="dot"></span><span id="connText">Prüfe…</span></div>
+    </div>
+    <div class="clock mono"><div id="time">--:--:--</div><div id="date">--</div></div>
+  </header>
+
+  <main>
+    <section class="view active" data-view="assistant" id="v-assistant">
+      <div class="assist">
+        <div class="core">
+          <div class="ring"></div>
+          <canvas id="orb" aria-hidden="true"></canvas>
+        </div>
+        <div class="state mono" id="coreLabel" role="status" aria-live="polite">BEREIT</div>
+        <div class="panel">
+          <div class="label">Letzte Antwort</div>
+          <p class="preview" id="lastPreview">Noch keine Antwort.</p>
+          <button class="btn" id="previewSpeak" disabled>Letzte Antwort vorlesen</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="conversation" id="v-conversation">
+      <div id="chat"></div>
+    </section>
+
+    <section class="view" data-view="audio">
+      <div class="stack">
+        <div class="panel">
+          <div class="label">Stimme (Fish Audio)</div>
+          <button class="btn primary" id="testVoice">Fish-Stimme testen</button>
+          <button class="btn" id="stopVoice">Wiedergabe stoppen</button>
+          <button class="btn" id="autoSpeak" aria-pressed="false">Automatisch vorlesen</button>
+          <p class="hint">Antworten werden nur mit echter Fish-Audio-Stimme abgespielt. Schlägt Fish fehl, erscheint eine Fehlermeldung. Die Systemstimme startest du nur manuell.</p>
+        </div>
+        <div class="panel">
+          <div class="label">Systemstimme (manuell)</div>
+          <button class="btn" id="sysTest">Systemstimme testen</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="status">
+      <div class="stack">
+        <button class="btn primary" id="checkStatus">Status jetzt prüfen</button>
+        <p class="hint">Ein erfolgreicher Backend-Check beweist nicht, dass Groq und Fish funktionieren. Die Karten zeigen deshalb auch das Ergebnis der letzten echten Anfrage.</p>
+        <div class="grid" id="statusGrid"></div>
+      </div>
+    </section>
+
+    <section class="view" data-view="settings">
+      <div class="stack">
+        <div class="panel">
+          <div class="label">Gespräch</div>
+          <button class="btn danger" id="clearChat">Gesprächsverlauf löschen</button>
+        </div>
+        <div class="panel">
+          <div class="label">Einstellungen</div>
+          <button class="btn" id="resetSettings">Einstellungen zurücksetzen</button>
+          <p class="hint">Gespeichert werden nur deine Einstellungen und der Zugangscode im Browser. API-Schlüssel liegen ausschließlich auf dem Server.</p>
+        </div>
+        <div class="panel">
+          <div class="label">Zugang</div>
+          <button class="btn" id="lockApp">Zugangscode vergessen und sperren</button>
+          <p class="hint">Danach musst du den Code neu eingeben.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div id="composer">
+      <textarea id="input" rows="1" placeholder="Nachricht an JARVIS…" autocomplete="off" aria-label="Nachricht eingeben"></textarea>
+      <button class="icon" id="mic" aria-label="Aufnahme starten oder stoppen">
+        <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
+      <button class="icon" id="stopBtn" aria-label="Stopp">
+        <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </button>
+      <button class="icon primary" id="send" aria-label="Senden">
+        <svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+    <nav class="tabs">
+      <button data-view="assistant" class="on">Assistent</button>
+      <button data-view="conversation">Verlauf</button>
+      <button data-view="audio">Audio</button>
+      <button data-view="status">System</button>
+      <button data-view="settings">Einstellungen</button>
+    </nav>
+  </footer>
+</div>
+
+<div class="gate" id="gate" role="dialog" aria-modal="true" aria-labelledby="gateTitle" hidden>
+  <form class="panel" id="gateForm" autocomplete="off">
+    <div class="brand" id="gateTitle">J.A.R.V.I.S.</div>
+    <div class="label">Zugangscode</div>
+    <input class="field" id="gateInput" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Code eingeben" aria-label="Zugangscode">
+    <p class="gate-msg" id="gateMsg" role="alert"></p>
+    <button class="btn primary" id="gateBtn" type="submit">Entsperren</button>
+    <p class="hint">Der Code schützt den Server vor fremden Anfragen. Er wird nur auf diesem Gerät gespeichert.</p>
+  </form>
+</div>
+
+<script>
+// ============ Konfiguration (keine Geheimnisse) ============
+const CONFIG = {
+  API: 'https://vnrssfuohdgqfzfmvnih.supabase.co/functions/v1/quick-worker',
+  MAX_CHARS: 2000, HISTORY: 12, CACHE: 20, MAX_REC_MS: 60000, MIN_REC_MS: 700, TTS_MAX: 1500,
+  T_HEALTH: 10000, T_CHAT: 35000, T_TTS: 45000, T_STT: 45000,
+};
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SETTINGS_KEY = 'jarvis.settings.v1';
+const CODE_KEY = 'jarvis.code.v1';
+const settings = loadSettings();
+function readCode() { try { return localStorage.getItem(CODE_KEY) || ''; } catch { return ''; } }
+function saveCode(v) { try { localStorage.setItem(CODE_KEY, v); } catch {} }
+function forgetCode() { try { localStorage.removeItem(CODE_KEY); } catch {} }
+function loadSettings() {
+  try { return { autoSpeak: true, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
+  catch { return { autoSpeak: true }; }
+}
+function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {} }
+
+class AppErr extends Error {
+  constructor(msg, code) { super(msg); this.code = code; }
+}
+const isAuthErr = e => ['auth', 'auth_blocked', 'auth_not_configured'].includes(e?.code);
+
+const S = {
+  core: 'idle', busy: false, history: [], ctrl: null, idleTimer: null,
+  recorder: null, recTimer: null, recStart: 0, discardRec: false, mic: 'unknown',
+  speakToken: 0, cache: new Map(), lastSpoken: '', lastReply: '',
+  playback: 'Bereit', lastError: '',
+  code: readCode(), auth: 'unknown',
+  backend: { state: 'unknown' }, groq: { state: 'untested' }, fish: { state: 'untested' },
+};
+const fmtTime = d => d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+
+// ============ Zustände ============
+const CORE_LABEL = { idle: 'BEREIT', listening: 'HÖRT ZU', thinking: 'DENKT', speaking: 'SPRICHT', error: 'FEHLER', offline: 'OFFLINE' };
+function setCore(state) {
+  S.core = state;
+  document.body.dataset.core = state;
+  $('#coreLabel').textContent = CORE_LABEL[state];
+}
+function scheduleIdle() {
+  clearTimeout(S.idleTimer);
+  S.idleTimer = setTimeout(() => {
+    if (S.core === 'error') setCore(S.backend.state === 'error' ? 'offline' : 'idle');
+  }, 6000);
+}
+function setGroq(state, msg) { S.groq = { state, msg, at: new Date() }; renderStatus(); }
+function setFish(state, msg) { S.fish = { state, msg, at: new Date() }; renderStatus(); }
+function setMic(state) {
+  S.mic = state;
+  $('#mic').classList.toggle('rec', state === 'recording');
+  renderStatus();
+}
+function setPlayback(text) { S.playback = text; renderStatus(); }
+function setLastError(msg) { S.lastError = msg; renderStatus(); }
+function setBusyUI(on) { $('#send').disabled = on; $('#mic').disabled = on; }
+
+// ============ Orb (Canvas 2D, keine externe Bibliothek) ============
+const orb = $('#orb');
+const octx = orb.getContext('2d');
+let size = 300;
+function fitOrb() {
+  const r = orb.parentElement.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  size = r.width;
+  orb.width = Math.round(r.width * dpr);
+  orb.height = Math.round(r.height * dpr);
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+new ResizeObserver(fitOrb).observe(orb.parentElement);
+
+const N = 170, P = [], GOLD = Math.PI * (3 - Math.sqrt(5));
+for (let i = 0; i < N; i++) {
+  const y = 1 - 2 * (i + 0.5) / N, r = Math.sqrt(1 - y * y), th = GOLD * i;
+  P.push([Math.cos(th) * r, y, Math.sin(th) * r]);
+}
+const E = [];
+for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
+  const dx = P[i][0] - P[j][0], dy = P[i][1] - P[j][1], dz = P[i][2] - P[j][2];
+  if (dx * dx + dy * dy + dz * dz < 0.13) E.push([i, j]);
+}
+const COL = {
+  idle: [63, 214, 255], listening: [240, 179, 90], thinking: [150, 185, 255],
+  speaking: [120, 240, 255], error: [255, 107, 107], offline: [90, 108, 122],
+};
+const col = [63, 214, 255];
+const proj = new Float32Array(N * 3);
+let rot = 0, level = 0, lastFrame = performance.now();
+
+function levelNow(now) {
+  if (S.core === 'speaking') return 0.34 + 0.14 * Math.sin(now / 120) + 0.08 * Math.sin(now / 53);
+  if (S.core === 'listening') return 0.2 + 0.12 * Math.sin(now / 200);
+  if (S.core === 'thinking') return 0.1 + 0.06 * Math.sin(now / 350);
+  return 0;
+}
+
+function frame(now) {
+  const dt = Math.min((now - lastFrame) / 1000, 0.1);
+  lastFrame = now;
+  const target = COL[S.core] || COL.idle;
+  for (let i = 0; i < 3; i++) col[i] += (target[i] - col[i]) * Math.min(1, dt * 6);
+  level += (levelNow(now) - level) * Math.min(1, dt * 10);
+
+  const base = S.core === 'offline' ? 0.02 : (reduceMotion ? 0.05 : 0.12);
+  rot += dt * (base + level * 0.4);
+  const tilt = 0.3 + 0.08 * Math.sin(now / 3000);
+  const R = size * 0.36 * (1 + level * 0.08), c = size / 2;
+  const cR = Math.cos(rot), sR = Math.sin(rot), cT = Math.cos(tilt), sT = Math.sin(tilt);
+  const rgb = `${col[0] | 0},${col[1] | 0},${col[2] | 0}`;
+
+  octx.clearRect(0, 0, size, size);
+  const g = octx.createRadialGradient(c, c, R * 0.2, c, c, R * 1.3);
+  g.addColorStop(0, `rgba(${rgb},${(0.10 + level * 0.12).toFixed(3)})`);
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  octx.fillStyle = g;
+  octx.fillRect(0, 0, size, size);
+
+  for (let i = 0; i < N; i++) {
+    const [x, y, z] = P[i];
+    const x1 = x * cR + z * sR, z1 = -x * sR + z * cR;
+    const y2 = y * cT - z1 * sT, z2 = y * sT + z1 * cT;
+    proj[i * 3] = c + x1 * R;
+    proj[i * 3 + 1] = c + y2 * R;
+    proj[i * 3 + 2] = (z2 + 1) / 2;
+  }
+  octx.lineWidth = 1;
+  for (const [i, j] of E) {
+    const d = (proj[i * 3 + 2] + proj[j * 3 + 2]) / 2;
+    octx.strokeStyle = `rgba(${rgb},${(0.06 + d * 0.22).toFixed(3)})`;
+    octx.beginPath();
+    octx.moveTo(proj[i * 3], proj[i * 3 + 1]);
+    octx.lineTo(proj[j * 3], proj[j * 3 + 1]);
+    octx.stroke();
+  }
+  for (let i = 0; i < N; i++) {
+    const d = proj[i * 3 + 2];
+    octx.fillStyle = `rgba(${rgb},${(0.3 + d * 0.7).toFixed(3)})`;
+    octx.beginPath();
+    octx.arc(proj[i * 3], proj[i * 3 + 1], 0.9 + d * 1.6 + level * 1.2, 0, Math.PI * 2);
+    octx.fill();
+  }
+  requestAnimationFrame(frame);
+}
+
+// ============ Audio: Wiedergabe, Analyser, iOS-Freigabe ============
+const audio = new Audio();
+audio.setAttribute('playsinline', '');
+audio.preload = 'auto';
+// Die Wiedergabe läuft bewusst direkt über das Audio-Element und nicht über Web Audio:
+// iOS Safari kann Web-Audio-Ausgabe stumm schalten (Stummschalter, pausierter Kontext),
+// obwohl play() Erfolg meldet. Der Orb pulsiert beim Sprechen deshalb mit eigenem Muster.
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+let unlocked = false, priming = false, silentSrc = '';
+const isSilent = () => !!silentSrc && audio.src === silentSrc;
+
+function silentWav() {
+  const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+// Beim ersten Tippen freischalten. iOS erlaubt Ton nur nach einer echten Geste:
+// touchstart/pointerdown zählen dafür nicht, touchend und click schon.
+function unlockAudio() {
+  if (unlocked) return;
+  unlocked = true;
+  if (!silentSrc) silentSrc = silentWav();
+  audio.loop = false;
+  audio.src = silentSrc;
+  audio.play()
+    .then(() => { if (isSilent() && !priming) audio.pause(); })
+    .catch(() => { unlocked = false; });
+}
+['touchend', 'click'].forEach(ev => document.addEventListener(ev, unlockAudio, { capture: true, passive: true }));
+
+// Hält das Audio-Element während des Ladens der Stimme "am Laufen" (stumm), damit der spätere
+// Start der echten Stimme auf iOS nicht als Wiedergabe ohne Geste abgelehnt wird.
+function primeAudio() {
+  try {
+    if (!silentSrc) silentSrc = silentWav();
+    priming = true;
+    audio.loop = true;
+    audio.src = silentSrc;
+    audio.play().catch(() => {});
+  } catch {}
+}
+
+audio.addEventListener('playing', () => {
+  if (isSilent()) return;
+  setCore('speaking');
+  setPlayback('Spielt ab');
+});
+audio.addEventListener('ended', () => {
+  if (isSilent()) return;
+  setPlayback('Bereit');
+  if (S.core === 'speaking') setCore('idle');
+});
+audio.addEventListener('pause', () => {
+  if (isSilent() || audio.ended) return;
+  if (S.core === 'speaking') setCore('idle');
+  if (S.playback === 'Spielt ab') setPlayback('Pausiert');
+});
+
+function cacheSet(text, url) {
+  S.cache.set(text, url);
+  while (S.cache.size > CONFIG.CACHE) {
+    const [k, v] = S.cache.entries().next().value;
+    URL.revokeObjectURL(v);
+    S.cache.delete(k);
+  }
+}
+
+function stopAudio(resetCore = true) {
+  S.speakToken++;
+  priming = false;
+  audio.loop = false;
+  try { audio.pause(); } catch {}
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  setPlayback('Bereit');
+  if (resetCore && (S.core === 'speaking' || S.core === 'thinking')) setCore('idle');
+}
+
+// Zu lange Antworten werden an einer Satzgrenze gekürzt (Limit des Servers).
+function forSpeech(text) {
+  if (text.length <= CONFIG.TTS_MAX) return text;
+  const cut = text.slice(0, CONFIG.TTS_MAX);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '), cut.lastIndexOf('\n'));
+  return end > 200 ? cut.slice(0, end + 1) : cut;
+}
+
+// Fish Audio: nur echtes Audio gilt als Erfolg. Kein stiller Wechsel zur Systemstimme.
+// Der Anbietername steht in der Fehlermeldung selbst (Backend oder hier). Es wird nirgends ein Präfix vorangestellt.
+async function speak(raw) {
+  const text = forSpeech((raw || '').trim());
+  if (!text) return;
+  stopAudio(false);
+  const token = S.speakToken;
+  let url = S.cache.get(text);
+
+  if (!url) {
+    setCore('thinking');
+    setPlayback('Stimme wird erzeugt…');
+    primeAudio();
+    try {
+      const blob = await apiCall('/tts',
+        { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) },
+        CONFIG.T_TTS, null, async r => r.blob());
+      if (token !== S.speakToken) return;
+      if (!blob || blob.size < 500 || !blob.type.startsWith('audio/')) {
+        throw new AppErr('Fish Audio: Die Antwort enthält kein gültiges Audio.', 'invalid');
+      }
+      url = URL.createObjectURL(blob);
+      cacheSet(text, url);
+    } catch (e) {
+      if (token !== S.speakToken) return;
+      if (isAuthErr(e)) {
+        stopAudio(false);
+        setPlayback('Bereit');
+        setCore('idle');
+        return addMsg('system', e.message);
+      }
+      return fishFailed(e, text);
+    }
+  }
+
+  if (token !== S.speakToken) return;
+  S.lastSpoken = text;
+  try {
+    priming = false;
+    audio.loop = false;
+    audio.src = url;
+    await audio.play();
+    setFish('ok', 'Audio erzeugt und abgespielt');
+  } catch {
+    if (token !== S.speakToken) return;
+    fishFailed(new AppErr('Fish Audio: Das Audio ist fertig, aber der Browser hat die Wiedergabe blockiert. Tippe auf „Erneut versuchen“.', 'playback'), text);
+  }
+}
+
+function fishFailed(e, text) {
+  priming = false;
+  audio.loop = false;
+  try { audio.pause(); } catch {}
+  setFish('error', e.message);
+  setLastError(e.message);
+  setPlayback('Keine Stimme');
+  setCore('error');
+  scheduleIdle();
+  addMsg('err', e.message, [
+    { label: 'Erneut versuchen', fn: () => speak(text) },
+    { label: 'Mit Systemstimme lesen', fn: () => speakSystem(text) },
+  ]);
+}
+
+// Systemstimme nur auf ausdrücklichen Wunsch
+function speakSystem(text) {
+  if (!text) return;
+  if (!('speechSynthesis' in window)) {
+    return addMsg('system', 'Die Systemstimme ist in diesem Browser nicht verfügbar.');
+  }
+  stopAudio(false);
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'de-DE';
+  u.onstart = () => { setCore('speaking'); setPlayback('Systemstimme spielt'); };
+  u.onend = () => { setPlayback('Bereit'); if (S.core === 'speaking') setCore('idle'); };
+  u.onerror = () => { setPlayback('Bereit'); if (S.core === 'speaking') setCore('idle'); };
+  speechSynthesis.speak(u);
+}
+
+// ============ Netzwerk ============
+async function apiCall(path, init, timeoutMs, signal, read) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const fromOutside = () => ctrl.abort();
+  if (signal) {
+    if (signal.aborted) ctrl.abort();
+    signal.addEventListener('abort', fromOutside);
+  }
+  try {
+    let r;
+    try {
+      const headers = { ...(init.headers || {}), 'X-Jarvis-Code': S.code };
+      r = await fetch(CONFIG.API + path, { method: 'POST', ...init, headers, signal: ctrl.signal });
+    } catch {
+      if (signal?.aborted) throw new AppErr('Abgebrochen.', 'abort');
+      if (ctrl.signal.aborted) throw new AppErr('Zeitüberschreitung. Der Dienst antwortet nicht rechtzeitig.', 'timeout');
+      throw new AppErr('Server nicht erreichbar. Prüfe deine Internetverbindung.', 'network');
+    }
+    if (!r.ok) {
+      let d = null;
+      try { d = await r.json(); } catch {}
+      const err = new AppErr(d?.error || `Serverfehler (HTTP ${r.status}).`, d?.code || 'http_' + r.status);
+      if (isAuthErr(err)) requireCode(err);
+      throw err;
+    }
+    return await read(r);
+  } catch (e) {
+    if (signal?.aborted && e.code !== 'abort') throw new AppErr('Abgebrochen.', 'abort');
+    if (ctrl.signal.aborted && !(e instanceof AppErr)) throw new AppErr('Zeitüberschreitung. Bitte erneut versuchen.', 'timeout');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', fromOutside);
+  }
+}
+
+const readJson = async r => {
+  const t = await r.text();
+  try { return JSON.parse(t); }
+  catch { throw new AppErr('Ungültige Antwort vom Server.', 'invalid'); }
+};
+
+// Prüft das Backend und den Zugangscode. Setzt S.auth auf:
+// ok | missing | denied | blocked | unconfigured | legacy (altes Backend ohne Zugangsschutz) | unknown (nicht erreichbar)
+async function checkHealth() {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), CONFIG.T_HEALTH);
+  try {
+    const r = await fetch(CONFIG.API + '/health', { headers: { 'X-Jarvis-Code': S.code }, signal: ctrl.signal });
+    let d = null;
+    try { d = await r.json(); } catch {}
+    if (r.status === 429) {
+      S.auth = 'blocked';
+      S.backend = { state: 'ok', at: new Date(), cfg: null, models: {} };
+    } else {
+      if (!r.ok || d?.ok !== true) throw new Error('ungültig');
+      if (typeof d.authorized !== 'boolean') S.auth = 'legacy';
+      else if (d.authorized) S.auth = 'ok';
+      else if (d.accessConfigured === false) S.auth = 'unconfigured';
+      else S.auth = S.code ? 'denied' : 'missing';
+      S.backend = {
+        state: 'ok', at: new Date(),
+        cfg: S.auth === 'ok' ? (d.configured || {}) : null,
+        models: S.auth === 'ok' ? (d.models || {}) : {},
+      };
+    }
+    if (S.core === 'offline') setCore('idle');
+  } catch {
+    S.auth = 'unknown';
+    S.backend = { state: 'error', at: new Date() };
+    if (S.core === 'idle' || S.core === 'offline') setCore('offline');
+  } finally {
+    clearTimeout(t);
+    renderStatus();
+  }
+  return S.auth;
+}
+
+// ============ Zugangscode ============
+const AUTH_TEXT = {
+  missing: 'Gib deinen Zugangscode ein.',
+  denied: 'Der Zugangscode stimmt nicht.',
+  blocked: 'Zu viele falsche Versuche. Bitte in etwa 15 Minuten erneut versuchen.',
+  unconfigured: 'Auf dem Server ist noch kein Zugangscode eingerichtet. Lege in Supabase das Secret ACCESS_CODE an.',
+  legacy: 'Das Backend kennt den Zugangscode noch nicht. Lade die neue index.ts in Supabase hoch und stelle sie bereit (Deploy).',
+  unknown: 'Der Server ist nicht erreichbar. Prüfe deine Internetverbindung.',
+};
+
+function gateMsg(text, info = false) {
+  const el = $('#gateMsg');
+  el.textContent = text || '';
+  el.classList.toggle('info', info);
+}
+function showGate(text) {
+  $('#gate').hidden = false;
+  $('.app').inert = true;
+  gateMsg(text);
+}
+function hideGate() {
+  $('#gate').hidden = true;
+  $('.app').inert = false;
+  gateMsg('');
+}
+// Wird aufgerufen, wenn der Server den Code ablehnt (HTTP 401 / Sperre / nicht eingerichtet).
+function requireCode(err) {
+  if (err.code === 'auth') { S.code = ''; forgetCode(); S.auth = 'denied'; }
+  else S.auth = err.code === 'auth_blocked' ? 'blocked' : 'unconfigured';
+  renderStatus();
+  showGate(err.code === 'auth' ? 'Der Zugangscode wird nicht akzeptiert. Bitte neu eingeben.' : err.message);
+}
+// Gate nach jeder Prüfung an den Zustand anpassen (Eingabe im Feld bleibt erhalten).
+function applyAuth() {
+  if (S.auth === 'ok') return hideGate();
+  if (S.auth === 'unknown') return;
+  if (S.auth === 'denied') { S.code = ''; forgetCode(); }
+  showGate(S.auth === 'denied' ? 'Der gespeicherte Code wird nicht mehr akzeptiert. Bitte neu eingeben.' : AUTH_TEXT[S.auth]);
+}
+async function healthCycle() {
+  await checkHealth();
+  applyAuth();
+}
+
+$('#gateForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const v = $('#gateInput').value.trim();
+  if (!v) return gateMsg(AUTH_TEXT.missing);
+  $('#gateBtn').disabled = true;
+  gateMsg('Prüfe…', true);
+  const previous = S.code;
+  S.code = v;
+  await checkHealth();
+  $('#gateBtn').disabled = false;
+  if (S.auth === 'ok') {
+    saveCode(v);
+    $('#gateInput').value = '';
+    hideGate();
+    addMsg('system', 'Zugang freigeschaltet.');
+  } else {
+    S.code = previous;
+    gateMsg(AUTH_TEXT[S.auth] || AUTH_TEXT.denied);
+  }
+});
+
+// ============ Nachrichten ============
+function appendMsg(node) {
+  const box = $('#v-conversation');
+  const near = box.scrollHeight - box.scrollTop - box.clientHeight < 100;
+  $('#chat').appendChild(node);
+  if (near) box.scrollTop = box.scrollHeight;
+}
+
+function addMsg(role, text, actions = []) {
+  const el = document.createElement('article');
+  el.className = 'msg ' + role;
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+  body.textContent = text;
+  el.appendChild(body);
+  if (actions.length) {
+    const row = document.createElement('div');
+    for (const a of actions) {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.textContent = a.label;
+      b.onclick = a.fn;
+      row.appendChild(b);
+    }
+    el.appendChild(row);
+  }
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = ({ user: 'Du', ai: 'JARVIS', err: 'Fehler', system: 'System' })[role] + ' · ' + fmtTime(new Date());
+  el.appendChild(meta);
+  appendMsg(el);
+  return el;
+}
+
+function showTyping(on) {
+  let t = $('#typing');
+  if (on) {
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'typing';
+      t.className = 'typing';
+      t.setAttribute('aria-live', 'polite');
+      t.textContent = 'JARVIS denkt…';
+      $('#chat').appendChild(t);
+    }
+    const box = $('#v-conversation');
+    box.scrollTop = box.scrollHeight;
+  } else {
+    t?.remove();
+  }
+}
+
+// ============ Befehle: Chat (Groq) ============
+async function sendMessage(raw) {
+  const text = (raw || '').trim();
+  if (!text || S.busy) return false;
+  if (text.length > CONFIG.MAX_CHARS) {
+    addMsg('err', `Die Nachricht ist zu lang (maximal ${CONFIG.MAX_CHARS} Zeichen).`);
+    return false;
+  }
+
+  // Musikwunsch: öffnet nur die Spotify-Suche, ohne KI-Aufruf
+  const sp = text.match(/^(?:spiel(?:\s+mir)?|spiele)\s+(.+)$/i);
+  if (sp) {
+    const q = sp[1].trim().slice(0, 100);
+    addMsg('user', text);
+    openSpotifySearch(q);
+    addMsg('ai', `Ich öffne die Spotify-Suche nach „${q}“. Den Titel startest du dort selbst.`);
+    return true;
+  }
+
+  S.busy = true;
+  S.ctrl = new AbortController();
+  setBusyUI(true);
+  addMsg('user', text);
+  setCore('thinking');
+  showTyping(true);
+  const messages = [...S.history, { role: 'user', content: text }].slice(-CONFIG.HISTORY);
+
+  try {
+    const data = await apiCall('/chat',
+      { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages }) },
+      CONFIG.T_CHAT, S.ctrl.signal, readJson);
+    const reply = typeof data?.reply === 'string' ? data.reply.trim() : '';
+    if (!reply) throw new AppErr('Die KI hat keine verwertbare Antwort geliefert.', 'empty');
+
+    S.history = [...S.history, { role: 'user', content: text }, { role: 'assistant', content: reply }].slice(-CONFIG.HISTORY);
+    S.lastReply = reply;
+    setGroq('ok', 'Chat-Antwort erfolgreich');
+    addMsg('ai', reply, [
+      { label: 'Vorlesen', fn: () => speak(reply) },
+      { label: 'Mit Systemstimme lesen', fn: () => speakSystem(reply) },
+    ]);
+    renderAssistantPreview();
+    if (settings.autoSpeak) speak(reply);
+    else setCore('idle');
+  } catch (e) {
+    if (e.code === 'abort') {
+      addMsg('system', 'Anfrage abgebrochen.');
+      setCore('idle');
+    } else if (isAuthErr(e)) {
+      addMsg('system', 'Nicht gesendet: ' + e.message, [{ label: 'Erneut senden', fn: () => sendMessage(text) }]);
+      setCore('idle');
+    } else {
+      setGroq('error', e.message);
+      setLastError(e.message);
+      addMsg('err', e.message, [{ label: 'Erneut senden', fn: () => sendMessage(text) }]);
+      setCore('error');
+      scheduleIdle();
+    }
+  } finally {
+    showTyping(false);
+    S.busy = false;
+    S.ctrl = null;
+    setBusyUI(false);
+  }
+  return true;
+}
+
+// ============ Sprache: Aufnahme -> Groq Whisper -> Chat ============
+function micFail(msg, state = 'error') {
+  setMic(state);
+  setLastError(msg);
+  setCore('idle');
+  addMsg('err', msg);
+}
+
+async function toggleMic() {
+  if (S.recorder && S.recorder.state === 'recording') { S.recorder.stop(); return; }
+  if (S.busy) return addMsg('system', 'JARVIS arbeitet noch. Bitte kurz warten.');
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    return micFail('Mikrofon: Die Aufnahme wird in diesem Browser nicht unterstützt. Bitte nutze das Textfeld.', 'unsupported');
+  }
+  unlockAudio();
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    if (e.name === 'NotAllowedError' || e.name === 'SecurityError') {
+      return micFail('Mikrofon: Der Zugriff ist verweigert. Erlaube ihn in Safari über das Aa-Symbol, dann „Websiteeinstellungen“ und „Mikrofon“, und lade die Seite danach neu.', 'denied');
+    }
+    if (e.name === 'NotFoundError') return micFail('Mikrofon: Es wurde kein Mikrofon gefunden.');
+    if (e.name === 'NotReadableError') return micFail('Mikrofon: Es wird gerade von einer anderen App benutzt. Schließe die andere App und versuche es erneut.');
+    return micFail(`Mikrofon: Es konnte nicht gestartet werden (${e.name || 'unbekannter Fehler'}).`);
+  }
+
+  let rec;
+  try {
+    const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+      .find(t => MediaRecorder.isTypeSupported?.(t));
+    rec = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream);
+  } catch {
+    stream.getTracks().forEach(t => t.stop());
+    return micFail('Mikrofon: Die Aufnahme konnte in diesem Browser nicht gestartet werden.');
+  }
+  const parts = [];
+  rec.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+  rec.onstop = () => finishRecording(rec, parts, stream);
+  rec.onerror = () => {
+    S.discardRec = true;
+    try { if (rec.state !== 'inactive') rec.stop(); } catch {}
+    addMsg('err', 'Mikrofon: Die Aufnahme wurde unterbrochen.');
+  };
+  S.recorder = rec;
+  S.discardRec = false;
+  S.recStart = Date.now();
+  rec.start();
+  setMic('recording');
+  setCore('listening');
+  S.recTimer = setTimeout(() => { if (rec.state === 'recording') rec.stop(); }, CONFIG.MAX_REC_MS);
+}
+
+async function finishRecording(rec, parts, stream) {
+  clearTimeout(S.recTimer);
+  stream.getTracks().forEach(t => t.stop());
+  S.recorder = null;
+  const discard = S.discardRec;
+  S.discardRec = false;
+  setMic('ready');
+  if (discard) return setCore('idle');
+
+  const blob = new Blob(parts, { type: rec.mimeType || parts[0]?.type || 'audio/mp4' });
+  if (blob.size < 2000 || Date.now() - S.recStart < CONFIG.MIN_REC_MS) {
+    setCore('idle');
+    return addMsg('err', 'Spracherkennung: Die Aufnahme ist leer oder zu kurz. Tippe auf das Mikrofon, sprich mindestens eine Sekunde und tippe zum Beenden erneut darauf.');
+  }
+
+  S.busy = true;
+  S.ctrl = new AbortController();
+  setBusyUI(true);
+  setCore('thinking');
+  let text = '';
+  try {
+    const data = await apiCall('/stt',
+      { headers: { 'Content-Type': blob.type }, body: blob },
+      CONFIG.T_STT, S.ctrl.signal, readJson);
+    text = typeof data?.text === 'string' ? data.text.trim() : '';
+    if (!text) throw new AppErr('Spracherkennung: Ich habe nichts verstanden. Bitte deutlicher oder näher am Mikrofon sprechen.', 'empty');
+    setGroq('ok', 'Spracherkennung erfolgreich');
+  } catch (e) {
+    if (e.code === 'abort') {
+      setCore('idle');
+      addMsg('system', 'Aufnahme abgebrochen.');
+    } else if (isAuthErr(e)) {
+      setCore('idle');
+      addMsg('system', 'Aufnahme nicht verarbeitet: ' + e.message);
+    } else {
+      setGroq('error', e.message);
+      setLastError(e.message);
+      addMsg('err', e.message);
+      setCore('error');
+      scheduleIdle();
+    }
+  } finally {
+    S.busy = false;
+    S.ctrl = null;
+    setBusyUI(false);
+  }
+  if (text) sendMessage(text);
+}
+
+function stopAll() {
+  S.ctrl?.abort();
+  stopAudio(false);
+  if (S.recorder && S.recorder.state === 'recording') {
+    S.discardRec = true;
+    S.recorder.stop();
+  }
+  setCore('idle');
+}
+
+// ============ Spotify: öffnet nur die Suche (ohne Premium) ============
+function openSpotifySearch(q) {
+  const app = q ? 'spotify:search:' + encodeURIComponent(q) : 'spotify:';
+  const web = q ? 'https://open.spotify.com/search/' + encodeURIComponent(q) : 'https://open.spotify.com/';
+  const a = document.createElement('a');
+  a.href = app;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => { if (!document.hidden) window.open(web, '_blank', 'noopener'); }, 1200);
+}
+
+// ============ Status-Anzeige ============
+const MIC_TEXT = {
+  unknown: 'Noch nicht verwendet', ready: 'Bereit', recording: 'Nimmt auf',
+  denied: 'Zugriff verweigert', error: 'Fehler beim Start', unsupported: 'Vom Browser nicht unterstützt',
+};
+const MIC_STATE = { unknown: 'pending', ready: 'ok', recording: 'pending', denied: 'error', error: 'error', unsupported: 'error' };
+
+// In der Karte des Anbieters ist der Name schon die Überschrift, deshalb hier ohne Namenspräfix anzeigen.
+const stripProvider = m => String(m || '').replace(/^(?:Fish Audio|Groq):\s*/, '');
+function lastResult(x) {
+  if (x.state === 'untested') return 'Noch keine Anfrage';
+  return `${fmtTime(x.at)} – ${x.state === 'ok' ? 'erfolgreich' : 'Fehler: ' + stripProvider(x.msg)}`;
+}
+const AUTH_CARD = {
+  ok: ['ok', 'Freigeschaltet'],
+  missing: ['error', 'Gesperrt: Code fehlt'],
+  denied: ['error', 'Gesperrt: Code falsch'],
+  blocked: ['error', 'Vorübergehend gesperrt (zu viele Versuche)'],
+  unconfigured: ['error', 'Server: Secret ACCESS_CODE fehlt'],
+  legacy: ['error', 'Backend nicht aktualisiert (kein Zugangsschutz)'],
+  unknown: ['pending', 'Unbekannt'],
+};
+function providerState(x) {
+  if (x.state === 'ok') return 'ok';
+  if (x.state === 'error') return 'error';
+  return 'pending';
+}
+
+function renderStatus() {
+  const grid = $('#statusGrid');
+  if (!grid) return;
+  const cfg = S.backend.cfg;
+  const models = S.backend.models || {};
+  const cards = [
+    {
+      t: 'Backend (Supabase)',
+      s: S.backend.state === 'ok' ? 'ok' : S.backend.state === 'error' ? 'error' : 'pending',
+      l: [
+        S.backend.state === 'ok' ? 'Erreichbar' : S.backend.state === 'error' ? 'Nicht erreichbar' : 'Wird geprüft',
+        S.backend.at ? `Geprüft: ${fmtTime(S.backend.at)}` : '',
+      ],
+    },
+    { t: 'Zugang', s: AUTH_CARD[S.auth][0], l: [AUTH_CARD[S.auth][1]] },
+    {
+      t: 'Groq (Antworten & Erkennung)',
+      s: !cfg ? 'pending' : !cfg.groq ? 'error' : providerState(S.groq),
+      l: [
+        !cfg ? 'Sichtbar nach Freischaltung' : cfg.groq ? 'Schlüssel auf dem Server gesetzt' : 'Secret GROQ_API_KEY fehlt',
+        `Chat-Modell: ${models.chat || '–'}`,
+        `Erkennungsmodell: ${models.stt || '–'}`,
+        `Letzte Anfrage: ${lastResult(S.groq)}`,
+      ],
+    },
+    {
+      t: 'Fish Audio (Stimme)',
+      s: !cfg ? 'pending' : !(cfg.fish && cfg.voice) ? 'error' : providerState(S.fish),
+      l: [
+        !cfg ? 'Sichtbar nach Freischaltung' : (cfg.fish && cfg.voice) ? 'Schlüssel und Stimme gesetzt' : 'Secret FISH_API_KEY oder FISH_VOICE_ID fehlt',
+        cfg ? `Modell: ${models.tts || 'Standard des Dienstes'}` : '',
+        `Letzte Ausgabe: ${lastResult(S.fish)}`,
+      ],
+    },
+    { t: 'Mikrofon', s: MIC_STATE[S.mic], l: [MIC_TEXT[S.mic]] },
+    { t: 'Audiowiedergabe', s: 'pending', l: [S.playback] },
+    { t: 'Letzte Fehlermeldung', s: S.lastError ? 'error' : 'ok', l: [S.lastError || 'Keine'] },
+    { t: 'Zeit & Datum', s: 'ok', l: [$('#time').textContent, $('#date').textContent] },
+  ];
+  grid.textContent = '';
+  for (const c of cards) {
+    const el = document.createElement('div');
+    el.className = 'card ' + c.s;
+    const h = document.createElement('h3');
+    h.textContent = c.t;
+    el.appendChild(h);
+    for (const line of c.l.filter(Boolean)) {
+      const p = document.createElement('p');
+      p.textContent = line;
+      el.appendChild(p);
+    }
+    grid.appendChild(el);
+  }
+  $('#connText').textContent = S.backend.state === 'ok' ? 'Verbunden'
+    : S.backend.state === 'error' ? 'Keine Verbindung' : 'Prüfe…';
+  $('#autoSpeak').textContent = 'Automatisch vorlesen: ' + (settings.autoSpeak ? 'an' : 'aus');
+  $('#autoSpeak').setAttribute('aria-pressed', String(settings.autoSpeak));
+}
+
+function renderAssistantPreview() {
+  const r = S.lastReply;
+  $('#lastPreview').textContent = r ? (r.length > 240 ? r.slice(0, 240) + '…' : r) : 'Noch keine Antwort.';
+  $('#previewSpeak').disabled = !r;
+}
+
+// ============ Navigation & Eingabe ============
+function showView(v) {
+  $$('.view').forEach(s => s.classList.toggle('active', s.dataset.view === v));
+  $$('nav.tabs button').forEach(b => {
+    const on = b.dataset.view === v;
+    b.classList.toggle('on', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
+  $('#composer').hidden = !(v === 'assistant' || v === 'conversation');
+  if (v === 'conversation') {
+    const box = $('#v-conversation');
+    box.scrollTop = box.scrollHeight;
+  }
+  if (v === 'status') healthCycle();
+}
+
+function autosize() {
+  const el = $('#input');
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function submit() {
+  const v = $('#input').value.trim();
+  if (!v) return;
+  if (S.busy) {
+    return addMsg('system', 'JARVIS arbeitet noch an der letzten Anfrage. Bitte kurz warten oder auf Stopp tippen. Dein Text bleibt im Feld.');
+  }
+  if (v.length > CONFIG.MAX_CHARS) {
+    return addMsg('err', `Die Nachricht ist zu lang (maximal ${CONFIG.MAX_CHARS} Zeichen).`);
+  }
+  $('#input').value = '';
+  autosize();
+  sendMessage(v);
+}
+
+$$('nav.tabs button').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
+$('#send').onclick = submit;
+$('#mic').onclick = toggleMic;
+$('#stopBtn').onclick = stopAll;
+$('#input').addEventListener('input', autosize);
+// Auf Touch-Geräten fügt Enter eine neue Zeile ein, gesendet wird mit dem Pfeil-Button.
+// Am Computer sendet Enter, Umschalt+Enter macht eine neue Zeile.
+const touchPrimary = matchMedia('(pointer: coarse)').matches;
+$('#input').addEventListener('keydown', e => {
+  if (touchPrimary) return;
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    submit();
+  }
+});
+$('#previewSpeak').onclick = () => { if (S.lastReply) speak(S.lastReply); };
+$('#testVoice').onclick = () => speak('Hallo, hier ist JARVIS. Die Stimmverbindung wird geprüft.');
+$('#stopVoice').onclick = stopAll;
+$('#autoSpeak').onclick = () => {
+  settings.autoSpeak = !settings.autoSpeak;
+  saveSettings();
+  renderStatus();
+};
+$('#sysTest').onclick = () => speakSystem('Systemstimme Test.');
+$('#checkStatus').onclick = healthCycle;
+$('#lockApp').onclick = () => {
+  stopAll();
+  S.code = '';
+  forgetCode();
+  S.auth = 'missing';
+  renderStatus();
+  showGate('Gesperrt. Gib den Zugangscode erneut ein.');
+};
+$('#clearChat').onclick = () => {
+  if (!confirm('Gesprächsverlauf löschen?')) return;
+  S.history = [];
+  S.lastReply = '';
+  $('#chat').textContent = '';
+  renderAssistantPreview();
+  addMsg('system', 'Verlauf gelöscht.');
+};
+$('#resetSettings').onclick = () => {
+  settings.autoSpeak = true;
+  saveSettings();
+  renderStatus();
+};
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && S.recorder && S.recorder.state === 'recording') stopAll();
+});
+window.addEventListener('pagehide', () => {
+  stopAll();
+  for (const u of S.cache.values()) URL.revokeObjectURL(u);
+  S.cache.clear();
+});
+
+// ============ Uhr & Start ============
+function tick() {
+  const d = new Date();
+  $('#time').textContent = d.toLocaleTimeString('de-DE');
+  $('#date').textContent = d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+  renderStatus();
+}
+
+setCore('idle');
+showView('assistant');
+tick();
+setInterval(tick, 1000);
+renderAssistantPreview();
+requestAnimationFrame(frame);
+if (!S.code) showGate(AUTH_TEXT.missing);
+healthCycle();
+setInterval(healthCycle, 60000);
+
+window.addEventListener('offline', () => {
+  if (S.core === 'idle' || S.core === 'error') setCore('offline');
+  addMsg('system', 'Keine Internetverbindung. Senden, Sprechen und Stimme gehen erst wieder, wenn du online bist.');
+});
+window.addEventListener('online', () => {
+  addMsg('system', 'Wieder online.');
+  healthCycle();
+});
+
+addMsg('system', 'Systeme gestartet. Tippe einmal auf den Bildschirm, damit die Stimme freigegeben wird.');
+</script>
+</body>
+</html>
