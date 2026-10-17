@@ -137,6 +137,22 @@
   .card h3 { margin:0 0 6px; font-size:14px; font-weight:600; }
   .card p { margin:3px 0; font-size:13px; color:var(--muted); word-break:break-word; line-height:1.4; }
 
+  .gate {
+    position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+    padding:max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    background:radial-gradient(120% 80% at 50% 0%, #0c1a26 0%, var(--bg) 60%);
+  }
+  .gate .panel { max-width:420px; }
+  .gate .brand { text-align:center; margin-bottom:14px; font-size:15px; }
+  .field {
+    display:block; width:100%; min-height:44px; margin:0 0 10px; padding:12px;
+    background:rgba(255,255,255,.04); border:1px solid var(--line); color:var(--text);
+    border-radius:12px; font:inherit; font-size:16px;
+  }
+  .field:focus { outline:none; border-color:rgba(79,216,255,.5); }
+  .gate-msg { min-height:20px; margin:0 0 10px; font-size:13px; line-height:1.4; color:var(--red); }
+  .gate-msg.info { color:var(--muted); }
+
   @media (prefers-reduced-motion:reduce) {
     .ring, .typing { animation:none; }
   }
@@ -205,7 +221,12 @@
         <div class="panel">
           <div class="label">Einstellungen</div>
           <button class="btn" id="resetSettings">Einstellungen zurücksetzen</button>
-          <p class="hint">Gespeichert werden nur deine Einstellungen im Browser. Schlüssel liegen ausschließlich auf dem Server.</p>
+          <p class="hint">Gespeichert werden nur deine Einstellungen und der Zugangscode im Browser. API-Schlüssel liegen ausschließlich auf dem Server.</p>
+        </div>
+        <div class="panel">
+          <div class="label">Zugang</div>
+          <button class="btn" id="lockApp">Zugangscode vergessen und sperren</button>
+          <p class="hint">Danach musst du den Code neu eingeben.</p>
         </div>
       </div>
     </section>
@@ -234,18 +255,33 @@
   </footer>
 </div>
 
+<div class="gate" id="gate" role="dialog" aria-modal="true" aria-labelledby="gateTitle" hidden>
+  <form class="panel" id="gateForm" autocomplete="off">
+    <div class="brand" id="gateTitle">J.A.R.V.I.S.</div>
+    <div class="label">Zugangscode</div>
+    <input class="field" id="gateInput" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Code eingeben" aria-label="Zugangscode">
+    <p class="gate-msg" id="gateMsg" role="alert"></p>
+    <button class="btn primary" id="gateBtn" type="submit">Entsperren</button>
+    <p class="hint">Der Code schützt den Server vor fremden Anfragen. Er wird nur auf diesem Gerät gespeichert.</p>
+  </form>
+</div>
+
 <script>
 // ============ Konfiguration (keine Geheimnisse) ============
 const CONFIG = {
-  API: 'https://vnrssfuohdgqfzfmvnih.supabase.co/functions/v1/smooth-responder',
-  MAX_CHARS: 2000, HISTORY: 12, CACHE: 20, MAX_REC_MS: 60000,
+  API: 'https://vnrssfuohdgqfzfmvnih.supabase.co/functions/v1/quick-worker',
+  MAX_CHARS: 2000, HISTORY: 12, CACHE: 20, MAX_REC_MS: 60000, MIN_REC_MS: 700, TTS_MAX: 1500,
   T_HEALTH: 10000, T_CHAT: 35000, T_TTS: 45000, T_STT: 45000,
 };
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const SETTINGS_KEY = 'jarvis.settings.v1';
+const CODE_KEY = 'jarvis.code.v1';
 const settings = loadSettings();
+function readCode() { try { return localStorage.getItem(CODE_KEY) || ''; } catch { return ''; } }
+function saveCode(v) { try { localStorage.setItem(CODE_KEY, v); } catch {} }
+function forgetCode() { try { localStorage.removeItem(CODE_KEY); } catch {} }
 function loadSettings() {
   try { return { autoSpeak: true, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
   catch { return { autoSpeak: true }; }
@@ -255,12 +291,14 @@ function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringif
 class AppErr extends Error {
   constructor(msg, code) { super(msg); this.code = code; }
 }
+const isAuthErr = e => ['auth', 'auth_blocked', 'auth_not_configured'].includes(e?.code);
 
 const S = {
   core: 'idle', busy: false, history: [], ctrl: null, idleTimer: null,
-  recorder: null, recTimer: null, discardRec: false, mic: 'unknown',
+  recorder: null, recTimer: null, recStart: 0, discardRec: false, mic: 'unknown',
   speakToken: 0, cache: new Map(), lastSpoken: '', lastReply: '',
   playback: 'Bereit', lastError: '',
+  code: readCode(), auth: 'unknown',
   backend: { state: 'unknown' }, groq: { state: 'untested' }, fish: { state: 'untested' },
 };
 const fmtTime = d => d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
@@ -322,15 +360,7 @@ const proj = new Float32Array(N * 3);
 let rot = 0, level = 0, lastFrame = performance.now();
 
 function levelNow(now) {
-  if (S.core === 'speaking') {
-    if (analyser && audio && !audio.paused) {
-      analyser.getByteFrequencyData(anaData);
-      let s = 0;
-      for (let i = 1; i < 24; i++) s += anaData[i];
-      return Math.min(1, (s / 23) / 120);
-    }
-    return 0.35 + 0.15 * Math.sin(now / 120);
-  }
+  if (S.core === 'speaking') return 0.34 + 0.14 * Math.sin(now / 120) + 0.08 * Math.sin(now / 53);
   if (S.core === 'listening') return 0.2 + 0.12 * Math.sin(now / 200);
   if (S.core === 'thinking') return 0.1 + 0.06 * Math.sin(now / 350);
   return 0;
@@ -388,26 +418,12 @@ function frame(now) {
 const audio = new Audio();
 audio.setAttribute('playsinline', '');
 audio.preload = 'auto';
-let actx = null, analyser = null, anaData = null, unlocked = false, unlocking = false;
-
-function ensureAudioGraph() {
-  try {
-    if (!actx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return;
-      actx = new AC();
-      analyser = actx.createAnalyser();
-      analyser.fftSize = 128;
-      anaData = new Uint8Array(analyser.frequencyBinCount);
-      actx.createMediaElementSource(audio).connect(analyser);
-      analyser.connect(actx.destination);
-    }
-    if (actx.state === 'suspended') actx.resume();
-  } catch (e) {
-    console.warn('AudioContext nicht verfügbar', e);
-    actx = null; analyser = null;
-  }
-}
+// Die Wiedergabe läuft bewusst direkt über das Audio-Element und nicht über Web Audio:
+// iOS Safari kann Web-Audio-Ausgabe stumm schalten (Stummschalter, pausierter Kontext),
+// obwohl play() Erfolg meldet. Der Orb pulsiert beim Sprechen deshalb mit eigenem Muster.
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+let unlocked = false, priming = false, silentSrc = '';
+const isSilent = () => !!silentSrc && audio.src === silentSrc;
 
 function silentWav() {
   const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
@@ -419,32 +435,44 @@ function silentWav() {
   return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
 }
 
-// Beim ersten Tippen freischalten (iOS erlaubt Ton nur nach einer Geste)
+// Beim ersten Tippen freischalten. iOS erlaubt Ton nur nach einer echten Geste:
+// touchstart/pointerdown zählen dafür nicht, touchend und click schon.
 function unlockAudio() {
-  ensureAudioGraph();
   if (unlocked) return;
   unlocked = true;
-  unlocking = true;
-  audio.src = silentWav();
+  if (!silentSrc) silentSrc = silentWav();
+  audio.loop = false;
+  audio.src = silentSrc;
   audio.play()
-    .then(() => audio.pause())
-    .catch(() => { unlocked = false; })
-    .finally(() => { unlocking = false; });
+    .then(() => { if (isSilent() && !priming) audio.pause(); })
+    .catch(() => { unlocked = false; });
 }
-document.addEventListener('pointerdown', unlockAudio, { passive: true });
+['touchend', 'click'].forEach(ev => document.addEventListener(ev, unlockAudio, { capture: true, passive: true }));
+
+// Hält das Audio-Element während des Ladens der Stimme "am Laufen" (stumm), damit der spätere
+// Start der echten Stimme auf iOS nicht als Wiedergabe ohne Geste abgelehnt wird.
+function primeAudio() {
+  try {
+    if (!silentSrc) silentSrc = silentWav();
+    priming = true;
+    audio.loop = true;
+    audio.src = silentSrc;
+    audio.play().catch(() => {});
+  } catch {}
+}
 
 audio.addEventListener('playing', () => {
-  if (unlocking) return;
+  if (isSilent()) return;
   setCore('speaking');
   setPlayback('Spielt ab');
 });
 audio.addEventListener('ended', () => {
-  if (unlocking) return;
+  if (isSilent()) return;
   setPlayback('Bereit');
   if (S.core === 'speaking') setCore('idle');
 });
 audio.addEventListener('pause', () => {
-  if (unlocking || audio.ended) return;
+  if (isSilent() || audio.ended) return;
   if (S.core === 'speaking') setCore('idle');
   if (S.playback === 'Spielt ab') setPlayback('Pausiert');
 });
@@ -460,14 +488,26 @@ function cacheSet(text, url) {
 
 function stopAudio(resetCore = true) {
   S.speakToken++;
+  priming = false;
+  audio.loop = false;
   try { audio.pause(); } catch {}
   if ('speechSynthesis' in window) speechSynthesis.cancel();
   setPlayback('Bereit');
   if (resetCore && (S.core === 'speaking' || S.core === 'thinking')) setCore('idle');
 }
 
+// Zu lange Antworten werden an einer Satzgrenze gekürzt (Limit des Servers).
+function forSpeech(text) {
+  if (text.length <= CONFIG.TTS_MAX) return text;
+  const cut = text.slice(0, CONFIG.TTS_MAX);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '), cut.lastIndexOf('\n'));
+  return end > 200 ? cut.slice(0, end + 1) : cut;
+}
+
 // Fish Audio: nur echtes Audio gilt als Erfolg. Kein stiller Wechsel zur Systemstimme.
-async function speak(text) {
+// Der Anbietername steht in der Fehlermeldung selbst (Backend oder hier). Es wird nirgends ein Präfix vorangestellt.
+async function speak(raw) {
+  const text = forSpeech((raw || '').trim());
   if (!text) return;
   stopAudio(false);
   const token = S.speakToken;
@@ -476,18 +516,25 @@ async function speak(text) {
   if (!url) {
     setCore('thinking');
     setPlayback('Stimme wird erzeugt…');
+    primeAudio();
     try {
       const blob = await apiCall('/tts',
         { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) },
         CONFIG.T_TTS, null, async r => r.blob());
       if (token !== S.speakToken) return;
       if (!blob || blob.size < 500 || !blob.type.startsWith('audio/')) {
-        throw new AppErr('Fish Audio hat kein gültiges Audio geliefert.', 'invalid');
+        throw new AppErr('Fish Audio: Die Antwort enthält kein gültiges Audio.', 'invalid');
       }
       url = URL.createObjectURL(blob);
       cacheSet(text, url);
     } catch (e) {
       if (token !== S.speakToken) return;
+      if (isAuthErr(e)) {
+        stopAudio(false);
+        setPlayback('Bereit');
+        setCore('idle');
+        return addMsg('system', e.message);
+      }
       return fishFailed(e, text);
     }
   }
@@ -495,22 +542,27 @@ async function speak(text) {
   if (token !== S.speakToken) return;
   S.lastSpoken = text;
   try {
+    priming = false;
+    audio.loop = false;
     audio.src = url;
     await audio.play();
     setFish('ok', 'Audio erzeugt und abgespielt');
   } catch {
     if (token !== S.speakToken) return;
-    fishFailed(new AppErr('Die Wiedergabe wurde blockiert. Tippe bei der Antwort auf „Vorlesen“.', 'playback'), text);
+    fishFailed(new AppErr('Fish Audio: Das Audio ist fertig, aber der Browser hat die Wiedergabe blockiert. Tippe auf „Erneut versuchen“.', 'playback'), text);
   }
 }
 
 function fishFailed(e, text) {
+  priming = false;
+  audio.loop = false;
+  try { audio.pause(); } catch {}
   setFish('error', e.message);
-  setLastError('Fish Audio: ' + e.message);
+  setLastError(e.message);
   setPlayback('Keine Stimme');
   setCore('error');
   scheduleIdle();
-  addMsg('err', 'Fish Audio: ' + e.message, [
+  addMsg('err', e.message, [
     { label: 'Erneut versuchen', fn: () => speak(text) },
     { label: 'Mit Systemstimme lesen', fn: () => speakSystem(text) },
   ]);
@@ -543,7 +595,8 @@ async function apiCall(path, init, timeoutMs, signal, read) {
   try {
     let r;
     try {
-      r = await fetch(CONFIG.API + path, { method: 'POST', ...init, signal: ctrl.signal });
+      const headers = { ...(init.headers || {}), 'X-Jarvis-Code': S.code };
+      r = await fetch(CONFIG.API + path, { method: 'POST', ...init, headers, signal: ctrl.signal });
     } catch {
       if (signal?.aborted) throw new AppErr('Abgebrochen.', 'abort');
       if (ctrl.signal.aborted) throw new AppErr('Zeitüberschreitung. Der Dienst antwortet nicht rechtzeitig.', 'timeout');
@@ -552,7 +605,9 @@ async function apiCall(path, init, timeoutMs, signal, read) {
     if (!r.ok) {
       let d = null;
       try { d = await r.json(); } catch {}
-      throw new AppErr(d?.error || `Serverfehler (HTTP ${r.status}).`, d?.code || 'http_' + r.status);
+      const err = new AppErr(d?.error || `Serverfehler (HTTP ${r.status}).`, d?.code || 'http_' + r.status);
+      if (isAuthErr(err)) requireCode(err);
+      throw err;
     }
     return await read(r);
   } catch (e) {
@@ -571,23 +626,106 @@ const readJson = async r => {
   catch { throw new AppErr('Ungültige Antwort vom Server.', 'invalid'); }
 };
 
+// Prüft das Backend und den Zugangscode. Setzt S.auth auf:
+// ok | missing | denied | blocked | unconfigured | legacy (altes Backend ohne Zugangsschutz) | unknown (nicht erreichbar)
 async function checkHealth() {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), CONFIG.T_HEALTH);
   try {
-    const r = await fetch(CONFIG.API + '/health', { signal: ctrl.signal });
-    const d = await r.json();
-    if (!r.ok || d?.ok !== true) throw new Error('ungültig');
-    S.backend = { state: 'ok', at: new Date(), cfg: d.configured || {}, models: d.models || {} };
+    const r = await fetch(CONFIG.API + '/health', { headers: { 'X-Jarvis-Code': S.code }, signal: ctrl.signal });
+    let d = null;
+    try { d = await r.json(); } catch {}
+    if (r.status === 429) {
+      S.auth = 'blocked';
+      S.backend = { state: 'ok', at: new Date(), cfg: null, models: {} };
+    } else {
+      if (!r.ok || d?.ok !== true) throw new Error('ungültig');
+      if (typeof d.authorized !== 'boolean') S.auth = 'legacy';
+      else if (d.authorized) S.auth = 'ok';
+      else if (d.accessConfigured === false) S.auth = 'unconfigured';
+      else S.auth = S.code ? 'denied' : 'missing';
+      S.backend = {
+        state: 'ok', at: new Date(),
+        cfg: S.auth === 'ok' ? (d.configured || {}) : null,
+        models: S.auth === 'ok' ? (d.models || {}) : {},
+      };
+    }
     if (S.core === 'offline') setCore('idle');
   } catch {
+    S.auth = 'unknown';
     S.backend = { state: 'error', at: new Date() };
     if (S.core === 'idle' || S.core === 'offline') setCore('offline');
   } finally {
     clearTimeout(t);
     renderStatus();
   }
+  return S.auth;
 }
+
+// ============ Zugangscode ============
+const AUTH_TEXT = {
+  missing: 'Gib deinen Zugangscode ein.',
+  denied: 'Der Zugangscode stimmt nicht.',
+  blocked: 'Zu viele falsche Versuche. Bitte in etwa 15 Minuten erneut versuchen.',
+  unconfigured: 'Auf dem Server ist noch kein Zugangscode eingerichtet. Lege in Supabase das Secret ACCESS_CODE an.',
+  legacy: 'Das Backend kennt den Zugangscode noch nicht. Lade die neue index.ts in Supabase hoch und stelle sie bereit (Deploy).',
+  unknown: 'Der Server ist nicht erreichbar. Prüfe deine Internetverbindung.',
+};
+
+function gateMsg(text, info = false) {
+  const el = $('#gateMsg');
+  el.textContent = text || '';
+  el.classList.toggle('info', info);
+}
+function showGate(text) {
+  $('#gate').hidden = false;
+  $('.app').inert = true;
+  gateMsg(text);
+}
+function hideGate() {
+  $('#gate').hidden = true;
+  $('.app').inert = false;
+  gateMsg('');
+}
+// Wird aufgerufen, wenn der Server den Code ablehnt (HTTP 401 / Sperre / nicht eingerichtet).
+function requireCode(err) {
+  if (err.code === 'auth') { S.code = ''; forgetCode(); S.auth = 'denied'; }
+  else S.auth = err.code === 'auth_blocked' ? 'blocked' : 'unconfigured';
+  renderStatus();
+  showGate(err.code === 'auth' ? 'Der Zugangscode wird nicht akzeptiert. Bitte neu eingeben.' : err.message);
+}
+// Gate nach jeder Prüfung an den Zustand anpassen (Eingabe im Feld bleibt erhalten).
+function applyAuth() {
+  if (S.auth === 'ok') return hideGate();
+  if (S.auth === 'unknown') return;
+  if (S.auth === 'denied') { S.code = ''; forgetCode(); }
+  showGate(S.auth === 'denied' ? 'Der gespeicherte Code wird nicht mehr akzeptiert. Bitte neu eingeben.' : AUTH_TEXT[S.auth]);
+}
+async function healthCycle() {
+  await checkHealth();
+  applyAuth();
+}
+
+$('#gateForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const v = $('#gateInput').value.trim();
+  if (!v) return gateMsg(AUTH_TEXT.missing);
+  $('#gateBtn').disabled = true;
+  gateMsg('Prüfe…', true);
+  const previous = S.code;
+  S.code = v;
+  await checkHealth();
+  $('#gateBtn').disabled = false;
+  if (S.auth === 'ok') {
+    saveCode(v);
+    $('#gateInput').value = '';
+    hideGate();
+    addMsg('system', 'Zugang freigeschaltet.');
+  } else {
+    S.code = previous;
+    gateMsg(AUTH_TEXT[S.auth] || AUTH_TEXT.denied);
+  }
+});
 
 // ============ Nachrichten ============
 function appendMsg(node) {
@@ -689,9 +827,12 @@ async function sendMessage(raw) {
     if (e.code === 'abort') {
       addMsg('system', 'Anfrage abgebrochen.');
       setCore('idle');
+    } else if (isAuthErr(e)) {
+      addMsg('system', 'Nicht gesendet: ' + e.message, [{ label: 'Erneut senden', fn: () => sendMessage(text) }]);
+      setCore('idle');
     } else {
       setGroq('error', e.message);
-      setLastError('Groq: ' + e.message);
+      setLastError(e.message);
       addMsg('err', e.message, [{ label: 'Erneut senden', fn: () => sendMessage(text) }]);
       setCore('error');
       scheduleIdle();
@@ -706,12 +847,18 @@ async function sendMessage(raw) {
 }
 
 // ============ Sprache: Aufnahme -> Groq Whisper -> Chat ============
+function micFail(msg, state = 'error') {
+  setMic(state);
+  setLastError(msg);
+  setCore('idle');
+  addMsg('err', msg);
+}
+
 async function toggleMic() {
   if (S.recorder && S.recorder.state === 'recording') { S.recorder.stop(); return; }
-  if (S.busy) return;
+  if (S.busy) return addMsg('system', 'JARVIS arbeitet noch. Bitte kurz warten.');
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-    setMic('unsupported');
-    return addMsg('err', 'Aufnahme wird in diesem Browser nicht unterstützt. Bitte nutze das Textfeld.');
+    return micFail('Mikrofon: Die Aufnahme wird in diesem Browser nicht unterstützt. Bitte nutze das Textfeld.', 'unsupported');
   }
   unlockAudio();
 
@@ -719,22 +866,34 @@ async function toggleMic() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (e) {
-    const denied = e.name === 'NotAllowedError' || e.name === 'SecurityError';
-    setMic(denied ? 'denied' : 'error');
-    setLastError('Mikrofon: ' + e.name);
-    return addMsg('err', denied
-      ? 'Mikrofonzugriff verweigert. Erlaube ihn für diese Seite in den Safari-Einstellungen (Aa-Symbol, dann Websiteeinstellungen).'
-      : e.name === 'NotFoundError' ? 'Kein Mikrofon gefunden.' : 'Das Mikrofon konnte nicht gestartet werden.');
+    if (e.name === 'NotAllowedError' || e.name === 'SecurityError') {
+      return micFail('Mikrofon: Der Zugriff ist verweigert. Erlaube ihn in Safari über das Aa-Symbol, dann „Websiteeinstellungen“ und „Mikrofon“, und lade die Seite danach neu.', 'denied');
+    }
+    if (e.name === 'NotFoundError') return micFail('Mikrofon: Es wurde kein Mikrofon gefunden.');
+    if (e.name === 'NotReadableError') return micFail('Mikrofon: Es wird gerade von einer anderen App benutzt. Schließe die andere App und versuche es erneut.');
+    return micFail(`Mikrofon: Es konnte nicht gestartet werden (${e.name || 'unbekannter Fehler'}).`);
   }
 
-  const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
-    .find(t => MediaRecorder.isTypeSupported?.(t));
-  const rec = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream);
+  let rec;
+  try {
+    const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+      .find(t => MediaRecorder.isTypeSupported?.(t));
+    rec = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream);
+  } catch {
+    stream.getTracks().forEach(t => t.stop());
+    return micFail('Mikrofon: Die Aufnahme konnte in diesem Browser nicht gestartet werden.');
+  }
   const parts = [];
   rec.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
   rec.onstop = () => finishRecording(rec, parts, stream);
+  rec.onerror = () => {
+    S.discardRec = true;
+    try { if (rec.state !== 'inactive') rec.stop(); } catch {}
+    addMsg('err', 'Mikrofon: Die Aufnahme wurde unterbrochen.');
+  };
   S.recorder = rec;
   S.discardRec = false;
+  S.recStart = Date.now();
   rec.start();
   setMic('recording');
   setCore('listening');
@@ -750,10 +909,10 @@ async function finishRecording(rec, parts, stream) {
   setMic('ready');
   if (discard) return setCore('idle');
 
-  const blob = new Blob(parts, { type: rec.mimeType || 'audio/webm' });
-  if (blob.size < 2000) {
+  const blob = new Blob(parts, { type: rec.mimeType || parts[0]?.type || 'audio/mp4' });
+  if (blob.size < 2000 || Date.now() - S.recStart < CONFIG.MIN_REC_MS) {
     setCore('idle');
-    return addMsg('err', 'Die Aufnahme ist leer oder zu kurz. Bitte etwas länger sprechen.');
+    return addMsg('err', 'Spracherkennung: Die Aufnahme ist leer oder zu kurz. Tippe auf das Mikrofon, sprich mindestens eine Sekunde und tippe zum Beenden erneut darauf.');
   }
 
   S.busy = true;
@@ -763,18 +922,21 @@ async function finishRecording(rec, parts, stream) {
   let text = '';
   try {
     const data = await apiCall('/stt',
-      { headers: { 'Content-Type': blob.type || 'audio/webm' }, body: blob },
+      { headers: { 'Content-Type': blob.type }, body: blob },
       CONFIG.T_STT, S.ctrl.signal, readJson);
     text = typeof data?.text === 'string' ? data.text.trim() : '';
-    if (!text) throw new AppErr('Ich habe nichts verstanden.', 'empty');
+    if (!text) throw new AppErr('Spracherkennung: Ich habe nichts verstanden. Bitte deutlicher oder näher am Mikrofon sprechen.', 'empty');
     setGroq('ok', 'Spracherkennung erfolgreich');
   } catch (e) {
     if (e.code === 'abort') {
       setCore('idle');
       addMsg('system', 'Aufnahme abgebrochen.');
+    } else if (isAuthErr(e)) {
+      setCore('idle');
+      addMsg('system', 'Aufnahme nicht verarbeitet: ' + e.message);
     } else {
       setGroq('error', e.message);
-      setLastError('Spracherkennung: ' + e.message);
+      setLastError(e.message);
       addMsg('err', e.message);
       setCore('error');
       scheduleIdle();
@@ -816,10 +978,21 @@ const MIC_TEXT = {
 };
 const MIC_STATE = { unknown: 'pending', ready: 'ok', recording: 'pending', denied: 'error', error: 'error', unsupported: 'error' };
 
+// In der Karte des Anbieters ist der Name schon die Überschrift, deshalb hier ohne Namenspräfix anzeigen.
+const stripProvider = m => String(m || '').replace(/^(?:Fish Audio|Groq):\s*/, '');
 function lastResult(x) {
   if (x.state === 'untested') return 'Noch keine Anfrage';
-  return `${fmtTime(x.at)} – ${x.state === 'ok' ? 'erfolgreich' : 'Fehler: ' + x.msg}`;
+  return `${fmtTime(x.at)} – ${x.state === 'ok' ? 'erfolgreich' : 'Fehler: ' + stripProvider(x.msg)}`;
 }
+const AUTH_CARD = {
+  ok: ['ok', 'Freigeschaltet'],
+  missing: ['error', 'Gesperrt: Code fehlt'],
+  denied: ['error', 'Gesperrt: Code falsch'],
+  blocked: ['error', 'Vorübergehend gesperrt (zu viele Versuche)'],
+  unconfigured: ['error', 'Server: Secret ACCESS_CODE fehlt'],
+  legacy: ['error', 'Backend nicht aktualisiert (kein Zugangsschutz)'],
+  unknown: ['pending', 'Unbekannt'],
+};
 function providerState(x) {
   if (x.state === 'ok') return 'ok';
   if (x.state === 'error') return 'error';
@@ -840,12 +1013,14 @@ function renderStatus() {
         S.backend.at ? `Geprüft: ${fmtTime(S.backend.at)}` : '',
       ],
     },
+    { t: 'Zugang', s: AUTH_CARD[S.auth][0], l: [AUTH_CARD[S.auth][1]] },
     {
       t: 'Groq (Antworten & Erkennung)',
       s: !cfg ? 'pending' : !cfg.groq ? 'error' : providerState(S.groq),
       l: [
-        !cfg ? 'Serverdaten fehlen' : cfg.groq ? 'Schlüssel auf dem Server gesetzt' : 'Secret GROQ_API_KEY fehlt',
-        `Modell: ${models.chat || '–'}`,
+        !cfg ? 'Sichtbar nach Freischaltung' : cfg.groq ? 'Schlüssel auf dem Server gesetzt' : 'Secret GROQ_API_KEY fehlt',
+        `Chat-Modell: ${models.chat || '–'}`,
+        `Erkennungsmodell: ${models.stt || '–'}`,
         `Letzte Anfrage: ${lastResult(S.groq)}`,
       ],
     },
@@ -853,7 +1028,8 @@ function renderStatus() {
       t: 'Fish Audio (Stimme)',
       s: !cfg ? 'pending' : !(cfg.fish && cfg.voice) ? 'error' : providerState(S.fish),
       l: [
-        !cfg ? 'Serverdaten fehlen' : (cfg.fish && cfg.voice) ? 'Schlüssel und Stimme gesetzt' : 'Secret FISH_API_KEY oder FISH_VOICE_ID fehlt',
+        !cfg ? 'Sichtbar nach Freischaltung' : (cfg.fish && cfg.voice) ? 'Schlüssel und Stimme gesetzt' : 'Secret FISH_API_KEY oder FISH_VOICE_ID fehlt',
+        cfg ? `Modell: ${models.tts || 'Standard des Dienstes'}` : '',
         `Letzte Ausgabe: ${lastResult(S.fish)}`,
       ],
     },
@@ -901,7 +1077,7 @@ function showView(v) {
     const box = $('#v-conversation');
     box.scrollTop = box.scrollHeight;
   }
-  if (v === 'status') checkHealth();
+  if (v === 'status') healthCycle();
 }
 
 function autosize() {
@@ -912,7 +1088,10 @@ function autosize() {
 
 function submit() {
   const v = $('#input').value.trim();
-  if (!v || S.busy) return;
+  if (!v) return;
+  if (S.busy) {
+    return addMsg('system', 'JARVIS arbeitet noch an der letzten Anfrage. Bitte kurz warten oder auf Stopp tippen. Dein Text bleibt im Feld.');
+  }
   if (v.length > CONFIG.MAX_CHARS) {
     return addMsg('err', `Die Nachricht ist zu lang (maximal ${CONFIG.MAX_CHARS} Zeichen).`);
   }
@@ -926,7 +1105,11 @@ $('#send').onclick = submit;
 $('#mic').onclick = toggleMic;
 $('#stopBtn').onclick = stopAll;
 $('#input').addEventListener('input', autosize);
+// Auf Touch-Geräten fügt Enter eine neue Zeile ein, gesendet wird mit dem Pfeil-Button.
+// Am Computer sendet Enter, Umschalt+Enter macht eine neue Zeile.
+const touchPrimary = matchMedia('(pointer: coarse)').matches;
 $('#input').addEventListener('keydown', e => {
+  if (touchPrimary) return;
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     submit();
@@ -941,7 +1124,15 @@ $('#autoSpeak').onclick = () => {
   renderStatus();
 };
 $('#sysTest').onclick = () => speakSystem('Systemstimme Test.');
-$('#checkStatus').onclick = checkHealth;
+$('#checkStatus').onclick = healthCycle;
+$('#lockApp').onclick = () => {
+  stopAll();
+  S.code = '';
+  forgetCode();
+  S.auth = 'missing';
+  renderStatus();
+  showGate('Gesperrt. Gib den Zugangscode erneut ein.');
+};
 $('#clearChat').onclick = () => {
   if (!confirm('Gesprächsverlauf löschen?')) return;
   S.history = [];
@@ -979,8 +1170,19 @@ tick();
 setInterval(tick, 1000);
 renderAssistantPreview();
 requestAnimationFrame(frame);
-checkHealth();
-setInterval(checkHealth, 60000);
+if (!S.code) showGate(AUTH_TEXT.missing);
+healthCycle();
+setInterval(healthCycle, 60000);
+
+window.addEventListener('offline', () => {
+  if (S.core === 'idle' || S.core === 'error') setCore('offline');
+  addMsg('system', 'Keine Internetverbindung. Senden, Sprechen und Stimme gehen erst wieder, wenn du online bist.');
+});
+window.addEventListener('online', () => {
+  addMsg('system', 'Wieder online.');
+  healthCycle();
+});
+
 addMsg('system', 'Systeme gestartet. Tippe einmal auf den Bildschirm, damit die Stimme freigegeben wird.');
 </script>
 </body>
