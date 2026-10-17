@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07090d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<link rel="manifest" href="manifest.json">
+<title>J.A.R.V.I.S.</title>
+<style>
+  :root {
+    --bg:#07090d; --panel:rgba(18,24,32,.72); --line:rgba(120,190,220,.16);
+    --text:#e6f1f7; --muted:#8fa2b2; --cyan:#4fd8ff; --ice:#bfefff;
+    --amber:#f0b35a; --red:#ff6b6b; --green:#6ee7a8; --grey:#5d6f7e;
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; }
+  body {
+    height:100vh; height:100dvh; overflow:hidden;
+    background:radial-gradient(120% 80% at 50% 0%, #0c1a26 0%, var(--bg) 60%);
+    color:var(--text); font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  [hidden] { display:none !important; }
+  .app { display:flex; flex-direction:column; height:100%; padding-top:env(safe-area-inset-top); }
+  .mono { font-family:ui-monospace, Menlo, Consolas, monospace; }
+
+  header.top {
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 16px; border-bottom:1px solid var(--line);
+  }
+  .brand { letter-spacing:.22em; font-size:13px; color:var(--ice); }
+  .conn { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin-top:3px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--grey); transition:background .3s; }
+  .clock { text-align:right; font-size:12px; color:var(--muted); }
+  .clock #time { font-size:14px; color:var(--text); }
+
+  main { flex:1; min-height:0; position:relative; }
+  .view {
+    position:absolute; inset:0; overflow:auto; padding:16px;
+    display:none; -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
+  }
+  .view.active { display:block; }
+  .stack { max-width:720px; margin:0 auto; display:flex; flex-direction:column; gap:12px; }
+
+  .assist { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100%; gap:18px; }
+  .core { position:relative; width:min(72vw, 300px); aspect-ratio:1; }
+  #orb { position:absolute; inset:0; width:100%; height:100%; }
+  .ring {
+    position:absolute; inset:-6px; border-radius:50%;
+    border:1px solid var(--line); border-top-color:var(--cyan);
+    animation:spin 7s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  body[data-core=listening] .ring { border-top-color:var(--amber); animation-duration:2.2s; }
+  body[data-core=thinking] .ring { animation-duration:1.3s; }
+  body[data-core=error] .ring { border-top-color:var(--red); animation:none; }
+  body[data-core=offline] .ring { border-top-color:var(--grey); animation:none; }
+  .state { letter-spacing:.3em; font-size:13px; color:var(--ice); }
+  body[data-core=error] .state { color:var(--red); }
+  body[data-core=offline] .state { color:var(--muted); }
+  body[data-core=listening] .state { color:var(--amber); }
+
+  body[data-core=idle] .dot { background:var(--green); }
+  body[data-core=listening] .dot { background:var(--amber); }
+  body[data-core=thinking] .dot, body[data-core=speaking] .dot { background:var(--cyan); }
+  body[data-core=error] .dot { background:var(--red); }
+  body[data-core=offline] .dot { background:var(--grey); }
+
+  .panel { width:100%; border:1px solid var(--line); border-radius:14px; background:var(--panel); padding:14px; }
+  .label { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
+  .preview { margin:0 0 10px; line-height:1.5; font-size:15px; white-space:pre-wrap; word-break:break-word; }
+  .hint { font-size:13px; color:var(--muted); line-height:1.5; margin:6px 0 0; }
+
+  .btn {
+    display:block; width:100%; min-height:44px; margin:0 0 8px; padding:12px 14px;
+    background:transparent; border:1px solid var(--line); color:var(--text); border-radius:12px;
+    font:inherit; font-size:15px; text-align:left; cursor:pointer;
+  }
+  .btn:disabled { opacity:.4; }
+  .btn.primary { border-color:rgba(79,216,255,.45); color:var(--ice); }
+  .btn.danger { border-color:rgba(255,107,107,.45); color:#ffc2c2; }
+  .btn[aria-pressed="true"] { border-color:var(--cyan); background:rgba(79,216,255,.1); }
+
+  .chip {
+    background:rgba(79,216,255,.08); border:1px solid rgba(79,216,255,.3); color:var(--ice);
+    border-radius:999px; padding:6px 12px; min-height:34px; margin:6px 6px 0 0;
+    font:inherit; font-size:13px; cursor:pointer;
+  }
+
+  #chat { max-width:720px; margin:0 auto; }
+  .msg { max-width:88%; margin:10px 0; padding:11px 13px; border-radius:14px; line-height:1.5; font-size:15px; }
+  .msg-body { white-space:pre-wrap; word-break:break-word; }
+  .msg.user { margin-left:auto; background:rgba(79,216,255,.14); border:1px solid rgba(79,216,255,.25); }
+  .msg.ai { background:rgba(255,255,255,.04); border:1px solid var(--line); }
+  .msg.system { margin:12px auto; max-width:100%; text-align:center; color:var(--muted); font-size:13px; }
+  .msg.err { border:1px solid rgba(255,107,107,.45); background:rgba(255,107,107,.08); color:#ffc2c2; }
+  .msg-meta { font-size:11px; color:var(--muted); margin-top:6px; }
+  .typing { font-size:13px; color:var(--muted); padding:6px 0; animation:pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.4; } }
+
+  footer { border-top:1px solid var(--line); background:rgba(7,9,13,.94); }
+  #composer { display:flex; align-items:flex-end; gap:8px; padding:10px 12px; }
+  #input {
+    flex:1; min-width:0; resize:none; max-height:120px; padding:11px 12px;
+    background:rgba(255,255,255,.04); border:1px solid var(--line); color:var(--text);
+    border-radius:12px; font:inherit; font-size:16px; line-height:1.4;
+  }
+  #input:focus { outline:none; border-color:rgba(79,216,255,.5); }
+  .icon {
+    width:44px; height:44px; flex:0 0 44px; display:flex; align-items:center; justify-content:center;
+    background:rgba(255,255,255,.03); border:1px solid var(--line); color:var(--ice);
+    border-radius:12px; cursor:pointer;
+  }
+  .icon:disabled { opacity:.35; }
+  .icon.primary { border-color:rgba(79,216,255,.5); background:rgba(79,216,255,.12); }
+  .icon.rec { border-color:var(--amber); color:var(--amber); box-shadow:0 0 14px rgba(240,179,90,.35); }
+  .icon svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+
+  nav.tabs {
+    display:grid; grid-template-columns:repeat(5,1fr); gap:4px;
+    padding:6px 6px calc(6px + env(safe-area-inset-bottom));
+  }
+  nav.tabs button {
+    background:none; border:0; color:var(--muted); font:inherit; font-size:12px;
+    min-height:44px; border-radius:10px; cursor:pointer; padding:6px 2px;
+  }
+  nav.tabs button.on { color:var(--cyan); background:rgba(79,216,255,.08); }
+
+  .grid { display:grid; gap:10px; grid-template-columns:1fr; }
+  @media (min-width:760px) { .grid { grid-template-columns:1fr 1fr; } }
+  .card { border:1px solid var(--line); border-left:3px solid var(--grey); border-radius:12px; padding:12px; background:var(--panel); }
+  .card.ok { border-left-color:var(--green); }
+  .card.error { border-left-color:var(--red); }
+  .card.pending { border-left-color:var(--amber); }
+  .card h3 { margin:0 0 6px; font-size:14px; font-weight:600; }
+  .card p { margin:3px 0; font-size:13px; color:var(--muted); word-break:break-word; line-height:1.4; }
+
+  .gate {
+    position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+    padding:max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    background:radial-gradient(120% 80% at 50% 0%, #0c1a26 0%, var(--bg) 60%);
+  }
+  .gate .panel { max-width:420px; }
+  .gate .brand { text-align:center; margin-bottom:14px; font-size:15px; }
+  .field {
+    display:block; width:100%; min-height:44px; margin:0 0 10px; padding:12px;
+    background:rgba(255,255,255,.04); border:1px solid var(--line); color:var(--text);
+    border-radius:12px; font:inherit; font-size:16px;
+  }
+  .field:focus { outline:none; border-color:rgba(79,216,255,.5); }
+  .gate-msg { min-height:20px; margin:0 0 10px; font-size:13px; line-height:1.4; color:var(--red); }
+  .gate-msg.info { color:var(--muted); }
+
+  @media (prefers-reduced-motion:reduce) {
+    .ring, .typing { animation:none; }
+  }
+</style>
+</head>
+<body data-core="idle">
+<div class="app">
+  <header class="top">
+    <div>
+      <div class="brand">J.A.R.V.I.S.</div>
+      <div class="conn"><span class="dot"></span><span id="connText">Prüfe…</span></div>
+    </div>
+    <div class="clock mono"><div id="time">--:--:--</div><div id="date">--</div></div>
+  </header>
+
+  <main>
+    <section class="view active" data-view="assistant" id="v-assistant">
+      <div class="assist">
+        <div class="core">
+          <div class="ring"></div>
+          <canvas id="orb" aria-hidden="true"></canvas>
+        </div>
+        <div class="state mono" id="coreLabel" role="status" aria-live="polite">BEREIT</div>
+        <div class="panel">
+          <div class="label">Letzte Antwort</div>
+          <p class="preview" id="lastPreview">Noch keine Antwort.</p>
+          <button class="btn" id="previewSpeak" disabled>Letzte Antwort vorlesen</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="conversation" id="v-conversation">
+      <div id="chat"></div>
+    </section>
+
+    <section class="view" data-view="audio">
+      <div class="stack">
+        <div class="panel">
+          <div class="label">Stimme (Fish Audio)</div>
+          <button class="btn primary" id="testVoice">Fish-Stimme testen</button>
+          <button class="btn" id="stopVoice">Wiedergabe stoppen</button>
+          <button class="btn" id="autoSpeak" aria-pressed="false">Automatisch vorlesen</button>
+          <p class="hint">Antworten werden nur mit echter Fish-Audio-Stimme abgespielt. Schlägt Fish fehl, erscheint eine Fehlermeldung. Die Systemstimme startest du nur manuell.</p>
+        </div>
+        <div class="panel">
+          <div class="label">Systemstimme (manuell)</div>
+          <button class="btn" id="sysTest">Systemstimme testen</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" data-view="status">
+      <div class="stack">
+        <button class="btn primary" id="checkStatus">Status jetzt prüfen</button>
+        <p class="hint">Ein erfolgreicher Backend-Check beweist nicht, dass Groq und Fish funktionieren. Die Karten zeigen deshalb auch das Ergebnis der letzten echten Anfrage.</p>
+        <div class="grid" id="statusGrid"></div>
+      </div>
+    </section>
+
+    <section class="view" data-view="settings">
+      <div class="stack">
+        <div class="panel">
+          <div class="label">Gespräch</div>
+          <button class="btn danger" id="clearChat">Gesprächsverlauf löschen</button>
+        </div>
+        <div class="panel">
+          <div class="label">Einstellungen</div>
+          <button class="btn" id="resetSettings">Einstellungen zurücksetzen</button>
+          <p class="hint">Gespeichert werden nur deine Einstellungen und der Zugangscode im Browser. API-Schlüssel liegen ausschließlich auf dem Server.</p>
+        </div>
+        <div class="panel">
+          <div class="label">Zugang</div>
+          <button class="btn" id="lockApp">Zugangscode vergessen und sperren</button>
+          <p class="hint">Danach musst du den Code neu eingeben.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div id="composer">
+      <textarea id="input" rows="1" placeholder="Nachricht an JARVIS…" autocomplete="off" aria-label="Nachricht eingeben"></textarea>
+      <button class="icon" id="mic" aria-label="Aufnahme starten oder stoppen">
+        <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
+      <button class="icon" id="stopBtn" aria-label="Stopp">
+        <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </button>
+      <button class="icon primary" id="send" aria-label="Senden">
+        <svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+    <nav class="tabs">
+      <button data-view="assistant" class="on">Assistent</button>
+      <button data-view="conversation">Verlauf</button>
+      <button data-view="audio">Audio</button>
+      <button data-view="status">System</button>
+      <button data-view="settings">Einstellungen</button>
+    </nav>
+  </footer>
+</div>
+
+<div class="gate" id="gate" role="dialog" aria-modal="true" aria-labelledby="gateTitle" hidden>
+  <form class="panel" id="gateForm" autocomplete="off">
+    <div class="brand" id="gateTitle">J.A.R.V.I.S.</div>
+    <div class="label">Zugangscode</div>
+    <input class="field" id="gateInput" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Code eingeben" aria-label="Zugangscode">
+    <p class="gate-msg" id="gateMsg" role="alert"></p>
+    <button class="btn primary" id="gateBtn" type="submit">Entsperren</button>
+    <p class="hint">Der Code schützt den Server vor fremden Anfragen. Er wird nur auf diesem Gerät gespeichert.</p>
+  </form>
+</div>
+
+<script>
+… (JavaScript continues; omitted here for brevity)
+</script>
+</body>
+</html>
