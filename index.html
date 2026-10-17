@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>J.A.R.V.I.S.</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#02060c">
+<link rel="manifest" href="manifest.json">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root { --cy:#43e4ff; --cy2:#16566a; --gold:#ffb84d; --red:#ff5c5c; --panel:rgba(4,18,28,.72); }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; color:var(--cy);
+    background:radial-gradient(ellipse at center, #071f38 0%, #02060c 70%);
+    font-family:Consolas, Menlo, "Courier New", monospace; overflow:hidden;
+    -webkit-user-select:none; user-select:none; }
+  #scene { position:fixed; inset:0; }
+  #scene canvas { display:block; width:100%; height:100%; touch-action:none; }
+  .hud { position:fixed; inset:0; pointer-events:none; }
+  .panel { position:absolute; background:var(--panel); border:1px solid var(--cy2); border-radius:4px;
+    padding:10px 12px; pointer-events:auto; backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); }
+  #top { position:absolute; top:12px; left:14px; right:14px; display:flex; justify-content:space-between;
+    font-size:11px; letter-spacing:.2em; }
+  #clock { position:absolute; top:10px; left:50%; transform:translateX(-50%); font-size:clamp(18px,3vw,30px);
+    letter-spacing:.18em; text-shadow:0 0 12px var(--cy); }
+  #left { left:12px; top:56px; width:220px; }
+  #right { right:12px; top:56px; width:300px; max-height:calc(100% - 180px); display:flex; flex-direction:column; }
+  #log { overflow:auto; font-size:12px; line-height:1.5; min-height:80px; max-height:40vh; }
+  #log .me { color:#9fc3cf; } #log .ai { color:var(--gold); } #log .err { color:var(--red); }
+  h3 { margin:0 0 8px; font-size:10px; letter-spacing:.22em; color:var(--gold); font-weight:normal; }
+  button { background:transparent; color:var(--cy); border:1px solid var(--cy2); padding:8px; margin:3px 0;
+    width:100%; text-align:left; font:inherit; font-size:12px; cursor:pointer; border-radius:3px; }
+  button:hover { border-color:var(--cy); background:rgba(67,228,255,.14); }
+  .row { display:flex; gap:6px; } .row button { text-align:center; }
+  #jarvis { position:absolute; left:18px; bottom:96px; width:130px; height:130px; border-radius:50%;
+    border:2px solid var(--cy2); display:flex; align-items:center; justify-content:center;
+    box-shadow:0 0 26px rgba(67,228,255,.2), inset 0 0 22px rgba(67,228,255,.12); pointer-events:none; }
+  #jarvis span { font-size:14px; letter-spacing:.3em; text-shadow:0 0 8px var(--cy); }
+  #jarvis::before { content:""; position:absolute; inset:-8px; border-radius:50%;
+    border:2px solid transparent; border-top-color:var(--cy); animation:spin 4s linear infinite; }
+  #jarvis.active::before { border-top-color:var(--gold); animation-duration:1.2s; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #bar { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); display:flex; gap:8px;
+    width:min(640px,94vw); pointer-events:auto; }
+  #cmd { flex:1; min-width:0; background:rgba(4,18,28,.9); border:1px solid var(--cy2); color:var(--cy);
+    padding:12px; font:inherit; font-size:16px; border-radius:4px; }
+  #cmd:focus { outline:none; border-color:var(--cy); }
+  .round { width:52px; height:52px; border-radius:50%; padding:0; margin:0; text-align:center; font-size:20px;
+    flex:0 0 52px; display:flex; align-items:center; justify-content:center; }
+  #mic.rec { border-color:var(--gold); color:var(--gold); box-shadow:0 0 16px rgba(255,184,77,.4); }
+  #menuBtn { display:none; position:absolute; left:12px; top:44px; width:auto; padding:6px 10px; pointer-events:auto; }
+  @media (max-width:760px) {
+    #right { display:none; }
+    #jarvis { display:none; }
+    #left { display:none; top:90px; left:8px; width:200px; }
+    #left.open { display:block; }
+    #menuBtn { display:block; }
+  }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+
+<div class="hud">
+  <div id="top"><span>STARK INDUSTRIES</span><span id="status">ONLINE</span></div>
+  <div id="clock">--:--:--</div>
+  <button id="menuBtn">☰ MENÜ</button>
+
+  <div class="panel" id="left">
+    <h3>MUSIK</h3>
+    <button id="spOpen">Spotify öffnen</button>
+    <div style="font-size:11px;opacity:.7;line-height:1.5;margin:6px 0">
+      JARVIS öffnet die Suche in der Spotify-App. Den Titel startest du dort selbst.
+    </div>
+    <h3 style="margin-top:12px">SYSTEM</h3>
+    <button id="testVoice">Stimme testen</button>
+  </div>
+
+  <div class="panel" id="right">
+    <h3>J.A.R.V.I.S. PROTOKOLL</h3>
+    <div id="log"></div>
+    <h3 style="margin-top:12px">BEISPIELE</h3>
+    <div style="font-size:11px;opacity:.65;line-height:1.5">
+      „Spiel Bohemian Rhapsody“ · „Wie spät ist es?“ · „Was ist ein Ironman-Reaktor?“
+    </div>
+  </div>
+
+  <div id="jarvis"><span>JARVIS</span></div>
+
+  <div id="bar">
+    <input id="cmd" placeholder="Befehl eingeben…" autocomplete="off">
+    <button id="mic" class="round" title="Sprechen">🎙</button>
+    <button id="stop" class="round" title="Stopp">■</button>
+  </div>
+</div>
+
+<script>
+// ============ Konfiguration (keine Geheimnisse) ============
+const API = 'https://vnrssfuohdgqfzfmvnih.supabase.co/functions/v1/index';
+const $ = id => document.getElementById(id);
+let recording = false, recorder = null, chunks = [], micStream = null;
+
+// ============ Three.js: Punktnetz als Kugel ============
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+$('scene').appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+camera.position.set(0, 0, 9);
+
+const network = new THREE.Group();
+scene.add(network);
+const netLineMat = new THREE.LineBasicMaterial({ color: 0x43e4ff, transparent: true, opacity: 0.2 });
+const netDotMat  = new THREE.PointsMaterial({ color: 0xb8f3ff, size: 0.08, transparent: true, opacity: 0.9 });
+{
+  const R = 3.6, N = 190, golden = Math.PI * (3 - Math.sqrt(5));
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    const y = 1 - 2 * (i + 0.5) / N, r = Math.sqrt(1 - y * y), th = golden * i;
+    pts.push(new THREE.Vector3(Math.cos(th) * r * R, y * R, Math.sin(th) * r * R));
+  }
+  const dotPos = new Float32Array(N * 3);
+  pts.forEach((p, i) => { dotPos[i * 3] = p.x; dotPos[i * 3 + 1] = p.y; dotPos[i * 3 + 2] = p.z; });
+  const dotGeo = new THREE.BufferGeometry();
+  dotGeo.setAttribute('position', new THREE.BufferAttribute(dotPos, 3));
+  network.add(new THREE.Points(dotGeo, netDotMat));
+
+  const linePos = [];
+  for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
+    if (pts[i].distanceTo(pts[j]) < 1.3) linePos.push(pts[i].x, pts[i].y, pts[i].z, pts[j].x, pts[j].y, pts[j].z);
+  }
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
+  network.add(new THREE.LineSegments(lineGeo, netLineMat));
+}
+
+// ============ Protokoll & Status ============
+function log(who, text, cls) {
+  const d = document.createElement('div');
+  d.className = cls || who;
+  d.textContent = (who === 'me' ? '> ' : who === 'ai' ? 'J.A.R.V.I.S.: ' : '') + text;
+  $('log').appendChild(d);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+function showError(msg) { log('err', '⚠ ' + msg, 'err'); }
+function setStatus(t) { $('status').textContent = t; }
+
+// ============ Stimme (Fish Audio) ============
+const audioEl = new Audio();
+let actx = null, analyser = null, anaData = null, unlocked = false, speaking = false, audioUrl = null;
+
+function silentWavUrl() {
+  const n = 8000 * 0.1, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+function unlockAudio() {
+  try {
+    if (!actx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      actx = new AC();
+      analyser = actx.createAnalyser();
+      analyser.fftSize = 256;
+      anaData = new Uint8Array(analyser.frequencyBinCount);
+      actx.createMediaElementSource(audioEl).connect(analyser);
+      analyser.connect(actx.destination);
+    }
+    if (actx.state === 'suspended') actx.resume();
+  } catch (e) { console.warn('Audio-Graph:', e); }
+  if (!unlocked) {
+    unlocked = true;
+    audioEl.src = silentWavUrl();
+    audioEl.play().catch(() => {});
+  }
+}
+window.addEventListener('pointerdown', unlockAudio, { passive: true });
+window.addEventListener('keydown', unlockAudio);
+
+audioEl.onplaying = () => { speaking = true; };
+audioEl.onended = audioEl.onpause = () => { speaking = false; };
+
+function stopSpeech() {
+  audioEl.pause();
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  speaking = false;
+}
+
+function fallbackSpeech(text) {
+  if (!('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'de-DE';
+  speechSynthesis.speak(u);
+}
+
+async function speak(text) {
+  unlockAudio();
+  try {
+    const r = await fetch(API + '/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) throw new Error(`Server ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    const blob = await r.blob();
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = URL.createObjectURL(blob);
+    audioEl.src = audioUrl;
+    await audioEl.play();
+  } catch (e) {
+    showError('Fish-Stimme: ' + e.message + ' (Ersatzstimme aktiv)');
+    fallbackSpeech(text);
+  }
+}
+
+function say(text) {
+  log('ai', text);
+  setStatus('ANTWORT');
+  speak(text);
+}
+
+// ============ Spotify: nur öffnen und suchen ============
+// Ohne Premium und ohne Entwickler-App geht nur die Suche in der Spotify-App.
+function openSpotifySearch(query) {
+  const app = query ? 'spotify:search:' + encodeURIComponent(query) : 'spotify:';
+  const web = query ? 'https://open.spotify.com/search/' + encodeURIComponent(query) : 'https://open.spotify.com/';
+  const a = document.createElement('a');
+  a.href = app;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Falls die App nicht geöffnet wurde (z. B. nicht installiert), Web-Version nehmen
+  setTimeout(() => { if (!document.hidden) window.open(web, '_blank'); }, 1200);
+}
+
+// Führt eine Musik-Aktion aus und gibt den Text für die Antwort zurück
+function runMusic(a) {
+  if (a.op === 'play') {
+    openSpotifySearch(a.query);
+    return `Ich öffne die Suche nach ${a.query}. Tippen Sie dort auf Play.`;
+  }
+  if (a.op === 'now' || a.op === 'pause' || a.op === 'resume' || a.op === 'next' || a.op === 'previous') {
+    return 'Die Steuerung von Spotify braucht ein Premium-Konto. Bitte bedienen Sie die Spotify-App direkt.';
+  }
+  return null;
+}
+
+$('spOpen').onclick = () => { openSpotifySearch(''); log('ai', 'Spotify wird geöffnet.'); };
+
+// ============ Befehle: Text oder Sprache -> Server -> Aktionen ============
+async function handle(raw) {
+  const text = (raw || '').trim();
+  if (!text) return;
+  log('me', text);
+  setStatus('DENKT');
+  try {
+    const r = await fetch(API + '/intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, context: {} }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+
+    const msgs = [];
+    for (const a of data.actions) {
+      const m = runMusic(a);
+      if (m) msgs.push(m);
+    }
+    say(msgs.length ? msgs.join(' ') : (data.reply || 'Erledigt.'));
+  } catch (e) {
+    showError('Befehl fehlgeschlagen: ' + e.message);
+    setStatus('ONLINE');
+  }
+}
+
+$('cmd').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { const v = e.target.value; e.target.value = ''; handle(v); }
+});
+
+// ============ Sprache: Aufnahme -> Server -> Groq Whisper ============
+function setRecUI(on) {
+  recording = on;
+  $('mic').classList.toggle('rec', on);
+  $('jarvis').classList.toggle('active', on);
+  setStatus(on ? 'HÖRT ZU' : 'ONLINE');
+}
+
+async function startRec() {
+  unlockAudio();
+  if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {
+    return showError('Aufnahme wird in diesem Browser nicht unterstützt. Bitte das Textfeld nutzen.');
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    return showError('Mikrofon: ' + e.message);
+  }
+  const mime = ['audio/webm', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
+  recorder = mime ? new MediaRecorder(micStream, { mimeType: mime }) : new MediaRecorder(micStream);
+  chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  recorder.onstop = finishRec;
+  recorder.start();
+  setRecUI(true);
+}
+
+async function finishRec() {
+  micStream.getTracks().forEach(t => t.stop());
+  setRecUI(false);
+  const type = recorder.mimeType || 'audio/webm';
+  const blob = new Blob(chunks, { type });
+  if (blob.size < 1000) return showError('Aufnahme zu kurz. Bitte etwas länger sprechen.');
+  setStatus('DENKT');
+  try {
+    const r = await fetch(API + '/stt', { method: 'POST', headers: { 'Content-Type': type }, body: blob });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (data.text && data.text.trim()) handle(data.text);
+    else showError('Ich habe nichts verstanden.');
+  } catch (e) {
+    showError('Spracherkennung: ' + e.message);
+    setStatus('ONLINE');
+  }
+}
+
+$('mic').onclick = () => { if (recording) recorder.stop(); else startRec(); };
+$('stop').onclick = () => {
+  if (recording) recorder.stop();
+  stopSpeech();
+  setStatus('ONLINE');
+};
+$('testVoice').onclick = () => say('Hallo, ich bin JARVIS. Die Stimmverbindung funktioniert.');
+$('menuBtn').onclick = () => $('left').classList.toggle('open');
+
+// ============ Animation: Kugel reagiert auf die Stimme ============
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+let last = performance.now(), t = 0, level = 0;
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now; t += dt;
+  const k = 1 - Math.pow(0.02, dt);
+
+  let target = 0;
+  if (analyser && speaking) {
+    analyser.getByteFrequencyData(anaData);
+    let s = 0;
+    for (let i = 1; i < 40; i++) s += anaData[i];
+    target = Math.min(1, (s / 39) / 150);
+  } else if (speaking) {
+    target = 0.3 + 0.2 * Math.sin(t * 12);
+  }
+  level += (target - level) * (target > level ? 0.45 : 0.08);
+
+  network.rotation.y += dt * (0.05 + level * 0.3);
+  network.rotation.x = 0.25 + Math.sin(t * 0.1) * 0.1;
+  network.scale.setScalar(1 + level * 0.06);
+  const lineTarget = recording ? 0.45 : 0.2 + level * 0.5;
+  netLineMat.opacity += (lineTarget - netLineMat.opacity) * k;
+  netLineMat.color.setHex(recording ? 0xffb84d : 0x43e4ff);
+  netDotMat.color.setHex(recording ? 0xffe2a8 : 0xb8f3ff);
+
+  $('jarvis').classList.toggle('active', recording || level > 0.05);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// ============ Start ============
+const tick = () => $('clock').textContent = new Date().toLocaleTimeString('de-DE');
+tick();
+setInterval(tick, 1000);
+requestAnimationFrame(frame);
+log('ai', 'Guten Tag, Sir. Tippen Sie einmal auf die Seite, damit die Stimme aktiviert wird.');
+</script>
+</body>
+</html>
