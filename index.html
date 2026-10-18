@@ -118,6 +118,10 @@
   .icon.rec { border-color:var(--amber); color:var(--amber); box-shadow:0 0 14px rgba(240,179,90,.35); }
   .icon svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 
+  .openbar { border-top:1px solid var(--line); background:rgba(18,24,32,.96); padding:10px 12px; }
+  .openbar-text { font-size:14px; line-height:1.4; margin:0 0 8px; color:var(--ice); }
+  .openbar .btn { margin:0 0 8px; text-align:center; text-decoration:none; }
+  .openbar .btn:last-child { margin-bottom:0; }
   nav.tabs {
     display:grid; grid-template-columns:repeat(5,1fr); gap:4px;
     padding:6px 6px calc(6px + env(safe-area-inset-bottom));
@@ -238,6 +242,13 @@
       </div>
     </section>
   </main>
+
+  <div class="openbar" id="openBar" role="region" aria-label="Spotify öffnen" hidden>
+    <p class="openbar-text" id="openBarText"></p>
+    <a class="btn primary" id="openApp" href="#">In der Spotify-App öffnen</a>
+    <a class="btn" id="openWeb" href="#" target="_blank" rel="noopener">Im Browser öffnen</a>
+    <button class="btn" id="openClose" type="button">Schließen</button>
+  </div>
 
   <footer>
     <div id="composer">
@@ -789,7 +800,7 @@ function showTyping(on) {
 }
 
 // ============ Befehle: Chat (Groq) ============
-async function sendMessage(raw) {
+async function sendMessage(raw, opts = {}) {
   const text = (raw || '').trim();
   if (!text || S.busy) return false;
   if (text.length > CONFIG.MAX_CHARS) {
@@ -809,14 +820,14 @@ async function sendMessage(raw) {
         return true;
       }
       const target = spotifyTarget('playlist', id);
-      openSpotify(target);
-      addMsg('ai', 'Ich öffne deine Playlist in Spotify. Dort tippst du selbst auf Play. Falls sich nichts öffnet, tippe auf den Knopf.',
-        [{ label: 'In Spotify öffnen', fn: () => openSpotify(target, true) }]);
+      musicReply(target, opts.voice,
+        'Ich öffne deine Playlist in Spotify. Dort tippst du selbst auf Play.',
+        'Playlist gefunden. Tippe auf den Knopf, dann öffnet sie sich in Spotify. Dort tippst du selbst auf Play.');
     } else {
       const target = spotifyTarget('search', music.q);
-      openSpotify(target);
-      addMsg('ai', `Ich öffne die Spotify-Suche nach „${music.q}“. Den Titel startest du dort selbst. Falls sich nichts öffnet, tippe auf den Knopf.`,
-        [{ label: 'In Spotify öffnen', fn: () => openSpotify(target, true) }]);
+      musicReply(target, opts.voice,
+        `Ich öffne die Spotify-Suche nach „${music.q}“. Den Titel startest du dort selbst.`,
+        `Suche nach „${music.q}“ bereit. Tippe auf den Knopf, dann öffnet sie sich in Spotify. Den Titel startest du dort selbst.`);
     }
     return true;
   }
@@ -984,7 +995,7 @@ async function finishRecording(rec, parts, stream) {
     S.ctrl = null;
     setBusyUI(false);
   }
-  if (text) sendMessage(text);
+  if (text) sendMessage(text, { voice: true });
 }
 
 function stopAll() {
@@ -1000,16 +1011,50 @@ function stopAll() {
 // ============ Spotify: öffnet nur Playlist oder Suche (ohne Premium) ============
 // Gestartet wird die Musik immer von dir selbst. Die automatische Steuerung wäre nur mit Premium möglich.
 function parseMusic(raw) {
-  const text = String(raw || '').trim().replace(/[.!?…\s]+$/, '');
-  const start = '^(?:spiel(?:e)?(?:\\s+mir)?)\\s+';
-  if (new RegExp(start + '(?:(?:meine|die|mein)\\s+)?(?:iron[\\s-]?man[\\s-]*)?(?:playlist|wiedergabeliste)$', 'i').test(text)) {
+  let text = String(raw || '').trim()
+    .replace(/^(?:(?:hey|hallo|okay|ok)\s+)?jarvis[\s,:!]+/i, '')
+    .replace(/play[\s-]+list/gi, 'playlist');
+  // Satzzeichen und Höflichkeitswörter am Ende entfernen, so wie Spracherkennung sie liefert
+  for (let i = 0; i < 4; i++) {
+    text = text.replace(/[.!?…,\s]+$/, '').replace(/\s+(?:bitte|mal|ab|jetzt|auf spotify|in spotify|bei spotify|mit spotify)$/i, '');
+  }
+  const verbs = '(?:spiel(?:e)?|starte|öffne)(?:\\s+mir)?\\s+';
+  if (new RegExp('^' + verbs + '(?:(?:meine|die|mein|deine|diese)\\s+)?(?:(?:iron[\\s-]?man|spotify)[\\s-]*)*(?:playlist|wiedergabeliste)$', 'i').test(text)) {
     return { type: 'playlist' };
   }
-  const m = text.match(new RegExp(start + '(.+)$', 'i'));
+  const m = text.match(/^(?:spiel(?:e)?(?:\s+mir)?)\s+(.+)$/i);
   if (!m) return null;
   if (/^(?:(?:das|den|ein|einen|mein|dein)\s+)?(?:lied|song|titel|track|musik)$/i.test(m[1].trim())) return null;
   const q = m[1].replace(/^(?:(?:das|den|ein|einen|mein|dein)\s+)?(?:lied|song|titel|track)\s+/i, '').trim().slice(0, 100);
   return q ? { type: 'search', q } : null;
+}
+
+// Antwort auf einen Musikbefehl. Getippt gibt es eine Geste, dann öffnet sich Spotify sofort.
+// Per Sprache fehlt die Geste, dort erlaubt iOS kein automatisches Öffnen: JARVIS spricht kurz
+// und zeigt einen großen Knopf, ein Tipp öffnet Spotify.
+function musicReply(target, voice, typedText, voiceText) {
+  if (!voice) {
+    openSpotify(target);
+    addMsg('ai', typedText + ' Falls sich nichts öffnet, tippe auf den Knopf.',
+      [{ label: 'In Spotify öffnen', fn: () => openSpotify(target, true) }]);
+    return;
+  }
+  addMsg('ai', voiceText, [{ label: 'In Spotify öffnen', fn: () => openSpotify(target, true) }]);
+  showOpenBar(target, voiceText);
+  if (settings.autoSpeak) speak('Bereit. Tippe auf den Knopf, dann öffnet sich Spotify.');
+}
+
+function showOpenBar(target, text) {
+  $('#openBarText').textContent = text;
+  $('#openApp').href = target.app;
+  $('#openWeb').href = target.web;
+  $('#openBar').hidden = false;
+  clearTimeout(S.openBarTimer);
+  S.openBarTimer = setTimeout(hideOpenBar, 45000);
+}
+function hideOpenBar() {
+  clearTimeout(S.openBarTimer);
+  $('#openBar').hidden = true;
 }
 
 // Akzeptiert Teilen-Link, spotify:playlist:ID oder die reine ID. Gibt die ID zurück oder ''.
@@ -1212,6 +1257,9 @@ $('#clearChat').onclick = () => {
   renderAssistantPreview();
   addMsg('system', 'Verlauf gelöscht.');
 };
+$('#openClose').onclick = hideOpenBar;
+$('#openApp').addEventListener('click', () => setTimeout(hideOpenBar, 800));
+$('#openWeb').addEventListener('click', () => setTimeout(hideOpenBar, 800));
 $('#savePlaylist').onclick = () => {
   const v = $('#playlistInput').value.trim();
   if (!v) {
