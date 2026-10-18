@@ -421,7 +421,8 @@ audio.preload = 'auto';
 // Die Wiedergabe läuft bewusst direkt über das Audio-Element und nicht über Web Audio:
 // iOS Safari kann Web-Audio-Ausgabe stumm schalten (Stummschalter, pausierter Kontext),
 // obwohl play() Erfolg meldet. Der Orb pulsiert beim Sprechen deshalb mit eigenem Muster.
-try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+function setAudioSession(type) { try { if (navigator.audioSession) navigator.audioSession.type = type; } catch {} }
+setAudioSession('playback');
 let unlocked = false, priming = false, silentSrc = '';
 const isSilent = () => !!silentSrc && audio.src === silentSrc;
 
@@ -862,11 +863,25 @@ async function toggleMic() {
     return micFail('Mikrofon: Die Aufnahme wird in diesem Browser nicht unterstützt. Bitte nutze das Textfeld.', 'unsupported');
   }
   unlockAudio();
+  // Wiedergabe und stummes Halte-Audio beenden, sonst kann iOS das Mikrofon nicht starten.
+  stopAudio(false);
+  setAudioSession('play-and-record');
 
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (first) {
+      // iOS meldet manchmal kurz InvalidStateError, wenn die Audio-Sitzung noch umschaltet.
+      if (first?.name !== 'InvalidStateError' && first?.name !== 'AbortError') throw first;
+      await new Promise(r => setTimeout(r, 400));
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
   } catch (e) {
+    setAudioSession('playback');
+    if (e.name === 'InvalidStateError') {
+      return micFail('Mikrofon: iOS hat das Mikrofon abgelehnt (InvalidStateError). Schließe die App ganz (nach oben wischen) und öffne sie neu. Hilft das nicht, öffne die Seite einmal direkt in Safari statt über das Home-Bildschirm-Symbol und teste dort.');
+    }
     if (e.name === 'NotAllowedError' || e.name === 'SecurityError') {
       return micFail('Mikrofon: Der Zugriff ist verweigert. Erlaube ihn in Safari über das Aa-Symbol, dann „Websiteeinstellungen“ und „Mikrofon“, und lade die Seite danach neu.', 'denied');
     }
@@ -905,6 +920,7 @@ async function finishRecording(rec, parts, stream) {
   clearTimeout(S.recTimer);
   stream.getTracks().forEach(t => t.stop());
   S.recorder = null;
+  setAudioSession('playback');
   const discard = S.discardRec;
   S.discardRec = false;
   setMic('ready');
