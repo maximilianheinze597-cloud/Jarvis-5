@@ -729,6 +729,7 @@ async function checkHealth() {
         state: 'ok', at: new Date(),
         cfg: S.auth === 'ok' ? (d.configured || {}) : null,
         models: S.auth === 'ok' ? (d.models || {}) : {},
+        features: S.auth === 'ok' ? (d.features || null) : undefined,
       };
     }
     if (S.core === 'offline') setCore('idle');
@@ -968,9 +969,19 @@ async function fetchWeather(wx) {
   else if (wx.here) body = await getPosition();
   else if (getProfile().home) body = { place: getProfile().home };
   else body = await getPosition();
-  const data = await apiCall('/weather',
-    { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
-    CONFIG.T_WEATHER, S.ctrl.signal, readJson);
+  let data;
+  try {
+    data = await apiCall('/weather',
+      { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      CONFIG.T_WEATHER, S.ctrl.signal, readJson);
+  } catch (e) {
+    if (isAuthErr(e) || e.code === 'abort') throw e;
+    if (e.code === 'not_found' || e.code === 'http_404') {
+      throw new AppErr('Wetter: Dein Backend in Supabase ist noch die alte Version und kennt die Wetter-Funktion nicht. Füge die neue index.ts bei „quick-worker“ ein und tippe auf Deploy.', 'weather_old');
+    }
+    const msg = /^Wetter:/.test(e.message) ? e.message : 'Wetter: ' + e.message;
+    throw new AppErr(`${msg} (Fehlercode: ${e.code || 'unbekannt'})`, e.code);
+  }
   data.where = data.place?.name || (wx.here || !body.place ? 'deinem Standort' : body.place);
   return data;
 }
@@ -1455,6 +1466,10 @@ function renderStatus() {
       l: [
         S.backend.state === 'ok' ? 'Erreichbar' : S.backend.state === 'error' ? 'Nicht erreichbar' : 'Wird geprüft',
         S.backend.at ? `Geprüft: ${fmtTime(S.backend.at)}` : '',
+        S.backend.state === 'ok' && S.auth === 'ok'
+          ? (S.backend.features ? 'Funktionen: Wetter, Websuche, Gedächtnis (Backend aktuell)'
+            : 'Backend veraltet: Wetter, Websuche und Gedächtnis fehlen. Füge die neue index.ts in Supabase ein und tippe auf Deploy.')
+          : '',
       ],
     },
     { t: 'Zugang', s: AUTH_CARD[S.auth][0], l: [AUTH_CARD[S.auth][1]] },
