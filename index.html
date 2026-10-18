@@ -7,6 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="JARVIS">
 <link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
 <title>J.A.R.V.I.S.</title>
 <style>
   :root {
@@ -122,6 +124,9 @@
   .openbar-text { font-size:14px; line-height:1.4; margin:0 0 8px; color:var(--ice); }
   .openbar .btn { margin:0 0 8px; text-align:center; text-decoration:none; }
   .openbar .btn:last-child { margin-bottom:0; }
+  .convo { width:100%; max-width:360px; margin:0; text-align:center; }
+  .field-label { display:block; font-size:12px; color:var(--muted); margin:2px 0 6px; }
+  textarea.field { resize:vertical; min-height:96px; line-height:1.4; }
   nav.tabs {
     display:grid; grid-template-columns:repeat(5,1fr); gap:4px;
     padding:6px 6px calc(6px + env(safe-area-inset-bottom));
@@ -180,6 +185,7 @@
           <canvas id="orb" aria-hidden="true"></canvas>
         </div>
         <div class="state mono" id="coreLabel" role="status" aria-live="polite">BEREIT</div>
+        <button class="btn convo" id="convoBtn" aria-pressed="false">Gespräch starten</button>
         <div class="panel">
           <div class="label">Letzte Antwort</div>
           <p class="preview" id="lastPreview">Noch keine Antwort.</p>
@@ -221,6 +227,18 @@
         <div class="panel">
           <div class="label">Gespräch</div>
           <button class="btn danger" id="clearChat">Gesprächsverlauf löschen</button>
+        </div>
+        <div class="panel">
+          <div class="label">Gedächtnis</div>
+          <label class="field-label" for="memName">Wie soll JARVIS dich anreden?</label>
+          <input class="field" id="memName" type="text" maxlength="40" autocomplete="off" placeholder="z. B. Sir oder dein Vorname">
+          <label class="field-label" for="memHome">Heimatort (für das Wetter)</label>
+          <input class="field" id="memHome" type="text" maxlength="60" autocomplete="off" placeholder="z. B. Hamburg">
+          <label class="field-label" for="memFacts">Das soll JARVIS über dich wissen (eine Sache pro Zeile)</label>
+          <textarea class="field" id="memFacts" maxlength="600" placeholder="z. B. Ich studiere Informatik&#10;Ich mag Rockmusik"></textarea>
+          <button class="btn primary" id="saveMemory">Gedächtnis speichern</button>
+          <p class="hint" id="memHint"></p>
+          <p class="hint">Du kannst auch sagen: „Merk dir, dass …“, „Was weißt du über mich?“ oder „Lösche dein Gedächtnis“. Gespeichert wird nur auf diesem Gerät und bei jeder Anfrage an die KI mitgeschickt.</p>
         </div>
         <div class="panel">
           <div class="label">Musik (Spotify)</div>
@@ -288,7 +306,8 @@
 // ============ Konfiguration (keine Geheimnisse) ============
 const CONFIG = {
   API: 'https://vnrssfuohdgqfzfmvnih.supabase.co/functions/v1/quick-worker',
-  MAX_CHARS: 2000, HISTORY: 12, CACHE: 20, MAX_REC_MS: 60000, MIN_REC_MS: 700, TTS_MAX: 1500,
+  MAX_CHARS: 2000, HISTORY: 12, CACHE: 20, MAX_REC_MS: 60000, MIN_REC_MS: 700, TTS_MAX: 1500, T_WEB: 60000, T_WEATHER: 20000,
+  VAD_SILENCE_MS: 1300, VAD_NOSPEECH_MS: 8000, VAD_MAX_MS: 30000, CONVO_MAX_TURNS: 15,
   T_HEALTH: 10000, T_CHAT: 35000, T_TTS: 45000, T_STT: 45000,
 };
 const $ = s => document.querySelector(s);
@@ -314,6 +333,7 @@ const isAuthErr = e => ['auth', 'auth_blocked', 'auth_not_configured'].includes(
 const S = {
   core: 'idle', busy: false, history: [], ctrl: null, idleTimer: null,
   recorder: null, recTimer: null, recStart: 0, discardRec: false, mic: 'unknown',
+  convo: false, convoTurns: 0, convoMiss: 0, vad: null, noSpeech: false, endWaiter: null, openBarTimer: null, lastForgotten: '',
   speakToken: 0, cache: new Map(), lastSpoken: '', lastReply: '',
   playback: 'Bereit', lastError: '',
   code: readCode(), auth: 'unknown',
@@ -485,11 +505,15 @@ audio.addEventListener('playing', () => {
   setCore('speaking');
   setPlayback('Spielt ab');
 });
+// Eine Antwort wird satzweise abgespielt. 'ended' meldet nur das Ende eines Stücks an speak().
+function resolveWaiter() { const w = S.endWaiter; S.endWaiter = null; if (w) w(); return !!w; }
 audio.addEventListener('ended', () => {
   if (isSilent()) return;
+  if (resolveWaiter()) return;
   setPlayback('Bereit');
   if (S.core === 'speaking') setCore('idle');
 });
+audio.addEventListener('error', () => { if (!isSilent()) resolveWaiter(); });
 audio.addEventListener('pause', () => {
   if (isSilent() || audio.ended) return;
   if (S.core === 'speaking') setCore('idle');
@@ -507,6 +531,7 @@ function cacheSet(text, url) {
 
 function stopAudio(resetCore = true) {
   S.speakToken++;
+  resolveWaiter();
   priming = false;
   audio.loop = false;
   try { audio.pause(); } catch {}
@@ -523,6 +548,38 @@ function forSpeech(text) {
   return end > 200 ? cut.slice(0, end + 1) : cut;
 }
 
+// Die Antwort wird in Stücke geteilt: Das erste ist kurz (ein Satz), damit die Stimme früh startet.
+// Während ein Stück spielt, werden die nächsten schon erzeugt.
+function splitSpeech(text) {
+  const sents = (text.match(/[^.!?…]+(?:[.!?…]+|$)/g) || [text]).map(x => x.trim()).filter(Boolean);
+  const chunks = [];
+  let cur = '';
+  for (const sent of sents) {
+    if (!chunks.length && !cur) { cur = sent; if (cur.length >= 25) { chunks.push(cur); cur = ''; } continue; }
+    if (!chunks.length) { chunks.push((cur + ' ' + sent).trim()); cur = ''; continue; }
+    if (cur && (cur + ' ' + sent).length > 280) { chunks.push(cur); cur = sent; }
+    else cur = cur ? cur + ' ' + sent : sent;
+  }
+  if (cur) chunks.push(cur);
+  return chunks.length ? chunks : [text];
+}
+
+async function fetchSpeech(chunk) {
+  const cached = S.cache.get(chunk);
+  if (cached) return cached;
+  const blob = await apiCall('/tts',
+    { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: chunk }) },
+    CONFIG.T_TTS, null, async r => r.blob());
+  if (!blob || blob.size < 500 || !blob.type.startsWith('audio/')) {
+    throw new AppErr('Fish Audio: Die Antwort enthält kein gültiges Audio.', 'invalid');
+  }
+  const url = URL.createObjectURL(blob);
+  cacheSet(chunk, url);
+  return url;
+}
+
+function waitEnded() { return new Promise(res => { S.endWaiter = res; }); }
+
 // Fish Audio: nur echtes Audio gilt als Erfolg. Kein stiller Wechsel zur Systemstimme.
 // Der Anbietername steht in der Fehlermeldung selbst (Backend oder hier). Es wird nirgends ein Präfix vorangestellt.
 async function speak(raw) {
@@ -530,49 +587,53 @@ async function speak(raw) {
   if (!text) return;
   stopAudio(false);
   const token = S.speakToken;
-  let url = S.cache.get(text);
+  const chunks = splitSpeech(text);
+  const jobs = [];
+  const job = i => {
+    if (i >= chunks.length) return null;
+    if (!jobs[i]) { jobs[i] = fetchSpeech(chunks[i]); jobs[i].catch(() => {}); }
+    return jobs[i];
+  };
 
-  if (!url) {
-    setCore('thinking');
-    setPlayback('Stimme wird erzeugt…');
-    primeAudio();
-    try {
-      const blob = await apiCall('/tts',
-        { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) },
-        CONFIG.T_TTS, null, async r => r.blob());
-      if (token !== S.speakToken) return;
-      if (!blob || blob.size < 500 || !blob.type.startsWith('audio/')) {
-        throw new AppErr('Fish Audio: Die Antwort enthält kein gültiges Audio.', 'invalid');
-      }
-      url = URL.createObjectURL(blob);
-      cacheSet(text, url);
-    } catch (e) {
-      if (token !== S.speakToken) return;
-      if (isAuthErr(e)) {
-        stopAudio(false);
-        setPlayback('Bereit');
-        setCore('idle');
-        return addMsg('system', e.message);
-      }
-      return fishFailed(e, text);
-    }
-  }
-
-  if (token !== S.speakToken) return;
+  setCore('thinking');
+  setPlayback('Stimme wird erzeugt…');
+  primeAudio();
+  job(0); job(1);
   S.lastSpoken = text;
+
   try {
-    priming = false;
-    audio.loop = false;
-    audio.src = url;
-    await audio.play();
-    setFish('ok', 'Audio erzeugt und abgespielt');
-  } catch {
+    for (let i = 0; i < chunks.length; i++) {
+      const url = await job(i);
+      if (token !== S.speakToken) return;
+      job(i + 2);
+      priming = false;
+      audio.loop = false;
+      audio.src = url;
+      try { await audio.play(); }
+      catch { throw new AppErr('Fish Audio: Das Audio ist fertig, aber der Browser hat die Wiedergabe blockiert. Tippe auf „Erneut versuchen“.', 'playback'); }
+      if (i === 0) setFish('ok', 'Audio erzeugt und abgespielt');
+      await waitEnded();
+      if (token !== S.speakToken) return;
+    }
+  } catch (e) {
     if (token !== S.speakToken) return;
-    fishFailed(new AppErr('Fish Audio: Das Audio ist fertig, aber der Browser hat die Wiedergabe blockiert. Tippe auf „Erneut versuchen“.', 'playback'), text);
+    if (isAuthErr(e)) {
+      stopAudio(false);
+      setPlayback('Bereit');
+      setCore('idle');
+      endConvo();
+      return addMsg('system', e.message);
+    }
+    return fishFailed(e, text);
   }
+  if (token !== S.speakToken) return;
+  setPlayback('Bereit');
+  if (S.core === 'speaking' || S.core === 'thinking') setCore('idle');
+  afterTurn();
 }
 
 function fishFailed(e, text) {
+  endConvo();
   priming = false;
   audio.loop = false;
   try { audio.pause(); } catch {}
@@ -799,6 +860,233 @@ function showTyping(on) {
   }
 }
 
+// ============ Gedächtnis ============
+function getProfile() {
+  const p = settings.profile || {};
+  return { name: String(p.name || ''), home: String(p.home || ''), facts: String(p.facts || '') };
+}
+function factLines() { return getProfile().facts.split('\n').map(x => x.trim()).filter(Boolean); }
+function profileText() {
+  const p = getProfile();
+  const lines = [];
+  if (p.name) lines.push('Anrede: ' + p.name);
+  if (p.home) lines.push('Heimatort: ' + p.home);
+  lines.push(...factLines());
+  return lines.join('\n').slice(0, 800);
+}
+function setProfile(patch) {
+  settings.profile = { ...getProfile(), ...patch };
+  saveSettings();
+  renderMemory();
+}
+function renderMemory() {
+  const p = getProfile();
+  const set = (sel, v) => { const el = $(sel); if (el && document.activeElement !== el) el.value = v; };
+  set('#memName', p.name); set('#memHome', p.home); set('#memFacts', p.facts);
+  const n = factLines().length + (p.name ? 1 : 0) + (p.home ? 1 : 0);
+  $('#memHint').textContent = n ? `Gespeichert: ${n} ${n === 1 ? 'Eintrag' : 'Einträge'}.` : 'Noch nichts gespeichert.';
+}
+
+// "Merk dir …", "Was weißt du über mich?", "Lösche dein Gedächtnis"
+function parseMemory(raw) {
+  const t = String(raw || '').trim().replace(/^(?:(?:hey|hallo|okay|ok)\s+)?jarvis[\s,:!]+/i, '').replace(/[.!?…,\s]+$/, '');
+  let m = t.match(/^(?:merk(?:e)?\s+dir|speicher(?:e)?(?:\s+dir)?|notier(?:e)?(?:\s+dir)?)(?:\s*,)?(?:\s+dass)?\s+(.+)$/i);
+  if (m) {
+    const fact = m[1].trim();
+    return { type: 'remember', fact: fact.charAt(0).toUpperCase() + fact.slice(1) };
+  }
+  if (/^(?:was\s+weißt\s+du\s+(?:alles\s+)?(?:über|von)\s+mich|was\s+hast\s+du\s+dir\s+(?:alles\s+)?(?:über\s+mich\s+)?gemerkt)$/i.test(t)) return { type: 'recall' };
+  if (/^(?:vergiss\s+(?:alles|mich)|lösche\s+(?:dein\s+)?gedächtnis|lösch\s+(?:dein\s+)?gedächtnis)(?:\s+.*)?$/i.test(t)) return { type: 'forget' };
+  return null;
+}
+
+// Antwort ohne KI. Mit "Automatisch vorlesen" wird sie gesprochen, sonst geht der Gesprächsmodus direkt weiter.
+function localReply(text, actions = []) {
+  addMsg('ai', text, actions);
+  S.lastReply = text;
+  renderAssistantPreview();
+  if (settings.autoSpeak) speak(text); else afterTurn();
+}
+
+function handleMemory(mem) {
+  if (mem.type === 'remember') {
+    const lines = factLines();
+    if (lines.join('\n').length + mem.fact.length + 1 > 600) {
+      return localReply('Mein Gedächtnis ist voll. Lösche in den Einstellungen unter „Gedächtnis“ etwas, dann merke ich es mir.');
+    }
+    lines.push(mem.fact.slice(0, 200));
+    setProfile({ facts: lines.join('\n') });
+    return localReply(`Gemerkt: ${mem.fact.slice(0, 200)}`);
+  }
+  if (mem.type === 'recall') {
+    const p = getProfile();
+    const parts = [];
+    if (p.name) parts.push(`Ich soll dich „${p.name}“ nennen.`);
+    if (p.home) parts.push(`Dein Heimatort ist ${p.home}.`);
+    const f = factLines();
+    if (f.length) parts.push('Gemerkt habe ich mir: ' + f.join('. ').replace(/\.\.+/g, '.') + '.');
+    return localReply(parts.length ? parts.join(' ') : 'Ich habe mir noch nichts über dich gemerkt.');
+  }
+  const old = getProfile().facts;
+  if (!old.trim()) return localReply('Es gibt nichts zu löschen. Mein Gedächtnis ist leer.');
+  S.lastForgotten = old;
+  setProfile({ facts: '' });
+  return localReply('Erledigt, ich habe die gemerkten Dinge gelöscht. Anrede und Heimatort bleiben.',
+    [{ label: 'Rückgängig', fn: () => { setProfile({ facts: S.lastForgotten }); addMsg('system', 'Wiederhergestellt.'); } }]);
+}
+
+// ============ Wetter (echte Daten über das Backend, Open-Meteo) ============
+function parseWeather(raw) {
+  let t = String(raw || '').trim().replace(/^(?:(?:hey|hallo|okay|ok)\s+)?jarvis[\s,:!]+/i, '').replace(/[.!?…,\s]+$/, '');
+  if (!/\b(?:wetter|regnet|regnen|schneit|schneien|temperatur|gewitter|regenschirm|wie\s+warm|wie\s+kalt)\b/i.test(t)) return null;
+  let day = 0;
+  if (/(?<![\wäöüß])übermorgen(?![\wäöüß])/i.test(t)) day = 2;
+  else if (/(?<!guten\s)\bmorgen\b/i.test(t)) day = 1;
+  const r = t.replace(/(?<![\wäöüß])(?:übermorgen|morgen(?:\s+früh)?|heute(?:\s+(?:abend|früh))?|jetzt|gerade|aktuell|eigentlich|bitte|mal)\b/gi, ' ')
+    .replace(/\s+(?:regnen|schneien|sein|werden|geben|aus|warm|kalt)$/i, '')
+    .replace(/\s+/g, ' ').trim();
+  const m = r.match(/\b(?:in|für|bei)\s+(.+)$/i);
+  let place = m ? m[1].trim().slice(0, 60) : '';
+  const here = /^(?:meiner\s+(?:nähe|umgebung)|der\s+(?:nähe|umgebung)|mir)$/i.test(place) || /\bhier\b/i.test(r);
+  if (here) place = '';
+  return { day, place, here };
+}
+
+function getPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new AppErr('Wetter: Dieses Gerät kann den Standort nicht bestimmen. Sag mir einen Ort, zum Beispiel „Wetter in Hamburg“.', 'geo'));
+    navigator.geolocation.getCurrentPosition(
+      p => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+      () => reject(new AppErr('Wetter: Ich kenne deinen Ort nicht. Sag „Wetter in Hamburg“ oder trage deinen Heimatort in den Einstellungen unter „Gedächtnis“ ein.', 'geo')),
+      { timeout: 8000, maximumAge: 600000 });
+  });
+}
+
+async function fetchWeather(wx) {
+  let body;
+  if (wx.place) body = { place: wx.place };
+  else if (wx.here) body = await getPosition();
+  else if (getProfile().home) body = { place: getProfile().home };
+  else body = await getPosition();
+  const data = await apiCall('/weather',
+    { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    CONFIG.T_WEATHER, S.ctrl.signal, readJson);
+  data.where = data.place?.name || (wx.here || !body.place ? 'deinem Standort' : body.place);
+  return data;
+}
+
+function weatherPrompt(w, day, question) {
+  const label = ['Heute', 'Morgen', 'Übermorgen'];
+  const c = w.current || {};
+  const lines = [`Echte Wetterdaten (Quelle Open-Meteo) für ${w.where}${w.place?.region ? ' (' + w.place.region + ')' : ''}:`];
+  lines.push(`Jetzt: ${c.temp ?? '?'} °C, gefühlt ${c.feels ?? '?'} °C, ${c.text}, Wind ${c.wind ?? '?'} km/h.`);
+  (w.days || []).slice(0, 3).forEach((d, i) => {
+    lines.push(`${label[i]}: ${d.text}, ${d.tmin ?? '?'} bis ${d.tmax ?? '?'} °C, Regenwahrscheinlichkeit ${d.rainChance ?? '?'} %, Wind bis ${d.wind ?? '?'} km/h.`);
+  });
+  lines.push(`Der Nutzer fragt nach: ${label[day]}.`);
+  lines.push('Frage des Nutzers: ' + question);
+  return lines.join('\n');
+}
+
+// ============ Internetsuche (Groq browser_search über das Backend) ============
+function parseWeb(raw) {
+  const t = String(raw || '').trim().replace(/^(?:(?:hey|hallo|okay|ok)\s+)?jarvis[\s,:!]+/i, '').replace(/[.!?…,\s]+$/, '');
+  if (/^(?:suche|such|recherchiere|google)\s+(?:mir\s+)?(?:im\s+(?:internet|netz|web)|online|nach)\b/i.test(t)) return { q: t };
+  if (/\b(?:nachrichten|neuigkeiten|schlagzeilen)\b/i.test(t) || /^was\s+gibt\s+es\s+neues\b/i.test(t) || /^was\s+ist\s+(?:heute\s+)?passiert\b/i.test(t)) return { q: t };
+  return null;
+}
+
+// ============ Gesprächsmodus ============
+let vadCtx = null;
+function ensureVad() {
+  try {
+    if (!vadCtx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) vadCtx = new AC(); }
+    if (vadCtx && vadCtx.state === 'suspended') vadCtx.resume();
+  } catch { vadCtx = null; }
+  return !!vadCtx;
+}
+function updateConvoUI() {
+  $('#convoBtn').textContent = S.convo ? 'Gespräch beenden' : 'Gespräch starten';
+  $('#convoBtn').setAttribute('aria-pressed', String(S.convo));
+}
+function startConvo() {
+  unlockAudio();
+  ensureVad();
+  S.convo = true; S.convoTurns = 0; S.convoMiss = 0;
+  updateConvoUI();
+  addMsg('system', 'Gesprächsmodus an. Sprich einfach, nach jeder Antwort höre ich wieder zu. Sage „Stopp“ oder tippe auf „Gespräch beenden“, um aufzuhören.');
+  beginRecording({ auto: true });
+}
+function endConvo(msg) {
+  if (!S.convo) return;
+  S.convo = false;
+  stopVad();
+  updateConvoUI();
+  if (msg) addMsg('system', msg);
+}
+function listenAgain(delay) {
+  setTimeout(() => {
+    if (S.convo && !S.busy && !S.recorder && S.core !== 'speaking') beginRecording({ auto: true });
+  }, delay);
+}
+// Wird nach jeder fertigen Antwort aufgerufen: hört im Gesprächsmodus wieder zu.
+function afterTurn() {
+  if (!S.convo || S.busy || S.recorder) return;
+  if (++S.convoTurns > CONFIG.CONVO_MAX_TURNS) {
+    return endConvo(`Gesprächsmodus nach ${CONFIG.CONVO_MAX_TURNS} Runden beendet, als Schutz vor unbeabsichtigten Kosten. Starte ihn bei Bedarf neu.`);
+  }
+  listenAgain(400);
+}
+function convoMiss() {
+  if (!S.convo) return false;
+  if (++S.convoMiss >= 2) endConvo('Gesprächsmodus beendet, ich habe nichts verstanden.');
+  else listenAgain(300);
+  return true;
+}
+// Stille-Erkennung: beendet die Aufnahme, wenn nach dem Sprechen 1,3 Sekunden Ruhe ist.
+function stopVad() {
+  if (!S.vad) return;
+  clearInterval(S.vad.timer);
+  clearTimeout(S.vad.timer);
+  try { S.vad.src?.disconnect(); } catch {}
+  S.vad = null;
+}
+function startVad(stream, rec) {
+  stopVad();
+  if (!vadCtx) {
+    // Ohne Audio-Analyse bleibt nur ein festes Zeitfenster.
+    S.vad = { timer: setTimeout(() => { if (rec.state === 'recording') rec.stop(); }, 7000) };
+    return;
+  }
+  let src, an;
+  try {
+    src = vadCtx.createMediaStreamSource(stream);
+    an = vadCtx.createAnalyser();
+    an.fftSize = 1024;
+    src.connect(an);
+  } catch {
+    S.vad = { timer: setTimeout(() => { if (rec.state === 'recording') rec.stop(); }, 7000) };
+    return;
+  }
+  const buf = new Float32Array(an.fftSize);
+  const t0 = Date.now();
+  let floor = 0, n = 0, loud = 0, started = false, lastVoice = 0;
+  const timer = setInterval(() => {
+    if (rec.state !== 'recording') return stopVad();
+    an.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    const rms = Math.sqrt(sum / buf.length);
+    const now = Date.now(), age = now - t0;
+    if (age < 500) { floor = (floor * n + rms) / (n + 1); n++; return; }
+    const thr = Math.max(0.015, floor * 3);
+    if (rms > thr) { loud++; lastVoice = now; if (loud >= 3) started = true; } else loud = 0;
+    if (started && now - lastVoice > CONFIG.VAD_SILENCE_MS) rec.stop();
+    else if (!started && age > CONFIG.VAD_NOSPEECH_MS) { S.noSpeech = true; S.discardRec = true; rec.stop(); }
+  }, 80);
+  S.vad = { timer, src, an };
+}
+
 // ============ Befehle: Chat (Groq) ============
 async function sendMessage(raw, opts = {}) {
   const text = (raw || '').trim();
@@ -806,6 +1094,14 @@ async function sendMessage(raw, opts = {}) {
   if (text.length > CONFIG.MAX_CHARS) {
     addMsg('err', `Die Nachricht ist zu lang (maximal ${CONFIG.MAX_CHARS} Zeichen).`);
     return false;
+  }
+
+  // Gedächtnis-Befehle laufen ohne KI
+  const mem = parseMemory(text);
+  if (mem) {
+    addMsg('user', text);
+    handleMemory(mem);
+    return true;
   }
 
   // Musikwunsch: öffnet nur Spotify (Playlist oder Suche), ohne KI-Aufruf
@@ -829,6 +1125,7 @@ async function sendMessage(raw, opts = {}) {
         `Ich öffne die Spotify-Suche nach „${music.q}“. Den Titel startest du dort selbst.`,
         `Suche nach „${music.q}“ bereit. Tippe auf den Knopf, dann öffnet sie sich in Spotify. Den Titel startest du dort selbst.`);
     }
+    endConvo();
     return true;
   }
 
@@ -838,12 +1135,20 @@ async function sendMessage(raw, opts = {}) {
   addMsg('user', text);
   setCore('thinking');
   showTyping(true);
-  const messages = [...S.history, { role: 'user', content: text }].slice(-CONFIG.HISTORY);
+  const wx = parseWeather(text);
+  const web = wx ? null : parseWeb(text);
 
   try {
+    // Wetter: erst echte Daten holen. Schlägt das fehl, gibt es eine Fehlermeldung und keine erfundene Antwort.
+    let content = text;
+    if (wx) {
+      try { content = weatherPrompt(await fetchWeather(wx), wx.day, text); }
+      catch (we) { we.noGroq = true; throw we; }
+    }
+    const messages = [...S.history, { role: 'user', content }].slice(-CONFIG.HISTORY);
     const data = await apiCall('/chat',
-      { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages }) },
-      CONFIG.T_CHAT, S.ctrl.signal, readJson);
+      { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages, profile: profileText(), ...(web ? { web: true } : {}) }) },
+      web ? CONFIG.T_WEB : CONFIG.T_CHAT, S.ctrl.signal, readJson);
     const reply = typeof data?.reply === 'string' ? data.reply.trim() : '';
     if (!reply) throw new AppErr('Die KI hat keine verwertbare Antwort geliefert.', 'empty');
 
@@ -856,7 +1161,7 @@ async function sendMessage(raw, opts = {}) {
     ]);
     renderAssistantPreview();
     if (settings.autoSpeak) speak(reply);
-    else setCore('idle');
+    else { setCore('idle'); afterTurn(); }
   } catch (e) {
     if (e.code === 'abort') {
       addMsg('system', 'Anfrage abgebrochen.');
@@ -865,11 +1170,12 @@ async function sendMessage(raw, opts = {}) {
       addMsg('system', 'Nicht gesendet: ' + e.message, [{ label: 'Erneut senden', fn: () => sendMessage(text) }]);
       setCore('idle');
     } else {
-      setGroq('error', e.message);
+      if (!e.noGroq) setGroq('error', e.message);
       setLastError(e.message);
       addMsg('err', e.message, [{ label: 'Erneut senden', fn: () => sendMessage(text) }]);
       setCore('error');
       scheduleIdle();
+      endConvo();
     }
   } finally {
     showTyping(false);
@@ -882,6 +1188,7 @@ async function sendMessage(raw, opts = {}) {
 
 // ============ Sprache: Aufnahme -> Groq Whisper -> Chat ============
 function micFail(msg, state = 'error') {
+  endConvo();
   setMic(state);
   setLastError(msg);
   setCore('idle');
@@ -891,6 +1198,11 @@ function micFail(msg, state = 'error') {
 async function toggleMic() {
   if (S.recorder && S.recorder.state === 'recording') { S.recorder.stop(); return; }
   if (S.busy) return addMsg('system', 'JARVIS arbeitet noch. Bitte kurz warten.');
+  return beginRecording({ auto: false });
+}
+
+async function beginRecording({ auto = false } = {}) {
+  if (S.busy || S.recorder) return;
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
     return micFail('Mikrofon: Die Aufnahme wird in diesem Browser nicht unterstützt. Bitte nutze das Textfeld.', 'unsupported');
   }
@@ -945,22 +1257,29 @@ async function toggleMic() {
   rec.start();
   setMic('recording');
   setCore('listening');
-  S.recTimer = setTimeout(() => { if (rec.state === 'recording') rec.stop(); }, CONFIG.MAX_REC_MS);
+  S.recTimer = setTimeout(() => { if (rec.state === 'recording') rec.stop(); }, auto ? CONFIG.VAD_MAX_MS : CONFIG.MAX_REC_MS);
+  if (auto) startVad(stream, rec);
 }
 
 async function finishRecording(rec, parts, stream) {
   clearTimeout(S.recTimer);
+  stopVad();
   stream.getTracks().forEach(t => t.stop());
   S.recorder = null;
   setAudioSession('playback');
   const discard = S.discardRec;
   S.discardRec = false;
   setMic('ready');
-  if (discard) return setCore('idle');
+  if (discard) {
+    setCore('idle');
+    if (S.noSpeech) { S.noSpeech = false; endConvo('Gesprächsmodus beendet, ich habe nichts gehört.'); }
+    return;
+  }
 
   const blob = new Blob(parts, { type: rec.mimeType || parts[0]?.type || 'audio/mp4' });
   if (blob.size < 2000 || Date.now() - S.recStart < CONFIG.MIN_REC_MS) {
     setCore('idle');
+    if (convoMiss()) return;
     return addMsg('err', 'Spracherkennung: Die Aufnahme ist leer oder zu kurz. Tippe auf das Mikrofon, sprich mindestens eine Sekunde und tippe zum Beenden erneut darauf.');
   }
 
@@ -976,8 +1295,12 @@ async function finishRecording(rec, parts, stream) {
     text = typeof data?.text === 'string' ? data.text.trim() : '';
     if (!text) throw new AppErr('Spracherkennung: Ich habe nichts verstanden. Bitte deutlicher oder näher am Mikrofon sprechen.', 'empty');
     setGroq('ok', 'Spracherkennung erfolgreich');
+    S.convoMiss = 0;
   } catch (e) {
-    if (e.code === 'abort') {
+    if (e.code === 'empty' && S.convo) {
+      setCore('idle');
+      convoMiss();
+    } else if (e.code === 'abort') {
       setCore('idle');
       addMsg('system', 'Aufnahme abgebrochen.');
     } else if (isAuthErr(e)) {
@@ -989,16 +1312,21 @@ async function finishRecording(rec, parts, stream) {
       addMsg('err', e.message);
       setCore('error');
       scheduleIdle();
+      endConvo();
     }
   } finally {
     S.busy = false;
     S.ctrl = null;
     setBusyUI(false);
   }
+  if (text && S.convo && /^(?:stopp?|ende|beende(?:n)?|tschüss|das\s+war(?:'s|\s+es)|danke\s*,?\s*das\s+war(?:'s|\s+es))\W*$/i.test(text)) {
+    return endConvo('Gesprächsmodus beendet.');
+  }
   if (text) sendMessage(text, { voice: true });
 }
 
 function stopAll() {
+  endConvo();
   S.ctrl?.abort();
   stopAudio(false);
   if (S.recorder && S.recorder.state === 'recording') {
@@ -1257,6 +1585,15 @@ $('#clearChat').onclick = () => {
   renderAssistantPreview();
   addMsg('system', 'Verlauf gelöscht.');
 };
+$('#convoBtn').onclick = () => { if (S.convo) endConvo('Gesprächsmodus beendet.'); else if (!S.busy) startConvo(); };
+$('#saveMemory').onclick = () => {
+  setProfile({
+    name: $('#memName').value.trim().slice(0, 40),
+    home: $('#memHome').value.trim().slice(0, 60),
+    facts: $('#memFacts').value.split('\n').map(x => x.trim().slice(0, 200)).filter(Boolean).join('\n').slice(0, 600),
+  });
+  $('#memHint').textContent = 'Gespeichert. ' + $('#memHint').textContent;
+};
 $('#openClose').onclick = hideOpenBar;
 $('#openApp').addEventListener('click', () => setTimeout(hideOpenBar, 800));
 $('#openWeb').addEventListener('click', () => setTimeout(hideOpenBar, 800));
@@ -1305,6 +1642,8 @@ tick();
 setInterval(tick, 1000);
 renderAssistantPreview();
 renderPlaylistHint();
+renderMemory();
+updateConvoUI();
 requestAnimationFrame(frame);
 if (!S.code) showGate(AUTH_TEXT.missing);
 healthCycle();
@@ -1319,7 +1658,10 @@ window.addEventListener('online', () => {
   healthCycle();
 });
 
+if (navigator.onLine === false) addMsg('system', 'Du bist offline. Die App ist geöffnet, aber Antworten, Wetter und Stimme gehen erst, wenn du wieder online bist.');
 addMsg('system', 'Systeme gestartet. Tippe einmal auf den Bildschirm, damit die Stimme freigegeben wird.');
+// Offline-Hinweis: Der Service Worker lädt die App auch ohne Netz. Er holt immer zuerst die neueste Version.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
 </html>
