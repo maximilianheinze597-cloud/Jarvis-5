@@ -219,6 +219,13 @@
           <button class="btn danger" id="clearChat">Gesprächsverlauf löschen</button>
         </div>
         <div class="panel">
+          <div class="label">Musik (Spotify)</div>
+          <input class="field" id="playlistInput" type="url" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Playlist-Link einfügen" aria-label="Spotify-Playlist-Link">
+          <button class="btn primary" id="savePlaylist">Playlist speichern</button>
+          <p class="hint" id="playlistHint"></p>
+          <p class="hint">So bekommst du den Link: In Spotify die Playlist öffnen, auf die drei Punkte tippen, dann Teilen, dann Link kopieren. Hier einfügen und speichern. Danach öffnet „Spiel meine Playlist“ genau diese Playlist. Gestartet wird sie dort mit Play von dir selbst.</p>
+        </div>
+        <div class="panel">
           <div class="label">Einstellungen</div>
           <button class="btn" id="resetSettings">Einstellungen zurücksetzen</button>
           <p class="hint">Gespeichert werden nur deine Einstellungen und der Zugangscode im Browser. API-Schlüssel liegen ausschließlich auf dem Server.</p>
@@ -790,13 +797,27 @@ async function sendMessage(raw) {
     return false;
   }
 
-  // Musikwunsch: öffnet nur die Spotify-Suche, ohne KI-Aufruf
-  const sp = text.match(/^(?:spiel(?:\s+mir)?|spiele)\s+(.+)$/i);
-  if (sp) {
-    const q = sp[1].trim().slice(0, 100);
+  // Musikwunsch: öffnet nur Spotify (Playlist oder Suche), ohne KI-Aufruf
+  const music = parseMusic(text);
+  if (music) {
     addMsg('user', text);
-    openSpotifySearch(q);
-    addMsg('ai', `Ich öffne die Spotify-Suche nach „${q}“. Den Titel startest du dort selbst.`);
+    if (music.type === 'playlist') {
+      const id = parsePlaylist(settings.playlist);
+      if (!id) {
+        addMsg('ai', 'Du hast noch keinen Playlist-Link gespeichert. Öffne in Spotify deine Playlist, tippe auf Teilen und Link kopieren, und füge ihn in den Einstellungen unter „Musik“ ein.',
+          [{ label: 'Zu den Einstellungen', fn: () => showView('settings') }]);
+        return true;
+      }
+      const target = spotifyTarget('playlist', id);
+      openSpotify(target);
+      addMsg('ai', 'Ich öffne deine Playlist in Spotify. Dort tippst du selbst auf Play. Falls sich nichts öffnet, tippe auf den Knopf.',
+        [{ label: 'In Spotify öffnen', fn: () => openSpotify(target, true) }]);
+    } else {
+      const target = spotifyTarget('search', music.q);
+      openSpotify(target);
+      addMsg('ai', `Ich öffne die Spotify-Suche nach „${music.q}“. Den Titel startest du dort selbst. Falls sich nichts öffnet, tippe auf den Knopf.`,
+        [{ label: 'In Spotify öffnen', fn: () => openSpotify(target, true) }]);
+    }
     return true;
   }
 
@@ -976,16 +997,49 @@ function stopAll() {
   setCore('idle');
 }
 
-// ============ Spotify: öffnet nur die Suche (ohne Premium) ============
-function openSpotifySearch(q) {
-  const app = q ? 'spotify:search:' + encodeURIComponent(q) : 'spotify:';
-  const web = q ? 'https://open.spotify.com/search/' + encodeURIComponent(q) : 'https://open.spotify.com/';
+// ============ Spotify: öffnet nur Playlist oder Suche (ohne Premium) ============
+// Gestartet wird die Musik immer von dir selbst. Die automatische Steuerung wäre nur mit Premium möglich.
+function parseMusic(raw) {
+  const text = String(raw || '').trim().replace(/[.!?…\s]+$/, '');
+  const start = '^(?:spiel(?:e)?(?:\\s+mir)?)\\s+';
+  if (new RegExp(start + '(?:(?:meine|die|mein)\\s+)?(?:iron[\\s-]?man[\\s-]*)?(?:playlist|wiedergabeliste)$', 'i').test(text)) {
+    return { type: 'playlist' };
+  }
+  const m = text.match(new RegExp(start + '(.+)$', 'i'));
+  if (!m) return null;
+  if (/^(?:(?:das|den|ein|einen|mein|dein)\s+)?(?:lied|song|titel|track|musik)$/i.test(m[1].trim())) return null;
+  const q = m[1].replace(/^(?:(?:das|den|ein|einen|mein|dein)\s+)?(?:lied|song|titel|track)\s+/i, '').trim().slice(0, 100);
+  return q ? { type: 'search', q } : null;
+}
+
+// Akzeptiert Teilen-Link, spotify:playlist:ID oder die reine ID. Gibt die ID zurück oder ''.
+function parsePlaylist(input) {
+  const v = String(input || '').trim();
+  const m = v.match(/playlist[\/:]([A-Za-z0-9]{22})/) || v.match(/^([A-Za-z0-9]{22})$/);
+  return m ? m[1] : '';
+}
+
+function spotifyTarget(kind, value) {
+  if (kind === 'playlist') {
+    return { app: 'spotify:playlist:' + value, web: 'https://open.spotify.com/playlist/' + value };
+  }
+  return { app: 'spotify:search:' + encodeURIComponent(value), web: 'https://open.spotify.com/search/' + encodeURIComponent(value) };
+}
+
+function openSpotify(target, byTap = false) {
+  if (byTap) { window.location.href = target.web; return; }
   const a = document.createElement('a');
-  a.href = app;
+  a.href = target.app;
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => { if (!document.hidden) window.open(web, '_blank', 'noopener'); }, 1200);
+  setTimeout(() => { if (!document.hidden) window.open(target.web, '_blank', 'noopener'); }, 1200);
+}
+
+function renderPlaylistHint() {
+  const id = parsePlaylist(settings.playlist);
+  $('#playlistHint').textContent = id ? 'Playlist gespeichert.' : 'Noch keine Playlist gespeichert.';
+  if (id && document.activeElement !== $('#playlistInput') && !$('#playlistInput').value) $('#playlistInput').value = settings.playlist;
 }
 
 // ============ Status-Anzeige ============
@@ -1158,6 +1212,22 @@ $('#clearChat').onclick = () => {
   renderAssistantPreview();
   addMsg('system', 'Verlauf gelöscht.');
 };
+$('#savePlaylist').onclick = () => {
+  const v = $('#playlistInput').value.trim();
+  if (!v) {
+    settings.playlist = '';
+    saveSettings();
+    renderPlaylistHint();
+    return;
+  }
+  if (!parsePlaylist(v)) {
+    $('#playlistHint').textContent = 'Das ist kein gültiger Spotify-Playlist-Link. Er sieht so aus: https://open.spotify.com/playlist/…';
+    return;
+  }
+  settings.playlist = v;
+  saveSettings();
+  renderPlaylistHint();
+};
 $('#resetSettings').onclick = () => {
   settings.autoSpeak = true;
   saveSettings();
@@ -1186,6 +1256,7 @@ showView('assistant');
 tick();
 setInterval(tick, 1000);
 renderAssistantPreview();
+renderPlaylistHint();
 requestAnimationFrame(frame);
 if (!S.code) showGate(AUTH_TEXT.missing);
 healthCycle();
