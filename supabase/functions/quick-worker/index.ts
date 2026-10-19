@@ -364,7 +364,9 @@ async function health(req: Request, ip: string, cors: Record<string, string>): P
       web: env("GROQ_WEB_MODEL") || DEFAULT_WEB_MODEL,
       tts: env("FISH_MODEL") || null,
     };
-  }
+
+    // Zeigt der App, dass dieses Backend die neuen Funktionen kennt.
+    body.features = { weather: true, web: true, profile: true };  }
   return json(body, 200, cors);
 }
 
